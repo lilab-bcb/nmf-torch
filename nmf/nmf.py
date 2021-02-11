@@ -1,12 +1,11 @@
 import numpy as np
-import random
 import torch
 
 class NMF:
-    def __init__(self, n_components, init='nndsvd', loss='l2', beta = 2, max_iter=200, tol=1e-4, random_state=0, fp_precision='float', use_gpu=False):
+    def __init__(self, n_components, init='nndsvd', loss='frobenius', beta = 2, max_iter=200, tol=1e-4, random_state=0, alpha=0.0, l1_ratio=0.0, fp_precision='float', use_gpu=False):
         self.k = n_components
 
-        if loss == 'l2':
+        if loss == 'frobenius':
             self._beta = 2
         if loss == 'kullback-leibler':
             self._beta = 1
@@ -21,6 +20,8 @@ class NMF:
             self._tensor_dtype = torch.double
         else:
             self._tensor_dtype = fp_precision
+        
+        self._epsilon = torch.finfo(self._tensor_dtype).eps
 
         self._device_type = 'cpu'
         if use_gpu:
@@ -34,41 +35,61 @@ class NMF:
         self._max_iter = max_iter
         self._tol = tol
         self._random_state = random_state
-        self._deviance = []
+
+    @property
+    def reconstruction_err(self):
+        return self._cur_err
 
     @staticmethod
-    def _loss(X, Y, beta):
-        if beta == 0:
-            x_div_y = X / Y
-            diver_mat = x_div_y - x_div_y.log2() - 1
-        elif beta == 1:
-            diver_mat = X * torch.log2(X / Y) - X + Y
-        else:
-            coef = 1 / (beta * (beta - 1))
-            diver_mat = coef * (X.pow(beta) + (beta - 1) * Y.pow(beta) - beta * X * Y.pow(beta - 1))
-        
-        return diver_mat.sum()
+    def _loss(X, Y, beta, epsilon, square_root=False):
+        if beta == 0 or beta == 1:
+            X_flat = X.flatten()
+            Y_flat = Y.flatten()
 
-    def _update_loss(self, X_hat):
-        self._deviance.append(self._loss(self.X, X_hat, self._beta))
+            idx = X_flat > epsilon
+            X_flat = X_flat[idx]
+            Y_flat = Y_flat[idx]
+
+            # Avoid division by zero
+            Y_flat[Y_flat == 0] = epsilon
+
+            x_div_y = X_flat / Y_flat
+            if beta == 0:
+                res = x_div_y.sum() - x_div_y.log().sum() - X.shape.numel()
+            else:
+                res = X_flat @ x_div_y.log() - X_flat.sum() + Y.sum()
+        else:
+            res = torch.sum(X.pow(beta) - beta * X * Y.pow(beta - 1) + (beta - 1) * Y.pow(beta)) / (beta * (beta - 1))
+
+        if square_root:
+            return torch.sqrt(2 * res)
+        else:
+            return res
     
     def _is_converged(self):
-        if len(self._deviance) > 1:
-            return torch.abs((self._deviance[-1] - self._deviance[-2]) / self._deviance[0]) < self._tol
+        if torch.abs((self._prev_err - self._cur_err) / self._init_err) < self._tol:
+            return True
         else:
+            self._prev_err = self._cur_err
             return False
 
-    def _get_X_hat(self):
+    def _get_HW(self):
         return self.H @ self.W
 
-    def _initialize_W_H(self, eps=1e-6):
-        random.seed(self._random_state)
-
-        if self._init_method == 'nndsvd':
+    def _initialize_HW(self, eps=1e-6):
+        n_samples, n_features = self.X.shape
+        if self._init_method is None:
+            if self.k < min(n_samples, n_features):
+                self._init_method = 'nndsvdar'
+            else:
+                self._init_method = 'random'
+        
+        if self._init_method in ['nndsvd', 'nndsvda', 'nndsvdar']:
+            torch.manual_seed(self._random_state)
             U, S, V = torch.svd_lowrank(self.X, q=self.k)
-            H, W = torch.zeros_like(U), torch.zeros_like(V.T)
-            H[:, 0] = S[0].square() * U[:, 0]
-            W[0, :] = S[0].square() * V[:, 0]
+            H, W= torch.zeros_like(U), torch.zeros_like(V.T)
+            H[:, 0] = S[0].sqrt() * U[:, 0]
+            W[0, :] = S[0].sqrt() * V[:, 0]
 
             for j in range(2, self.k):
                 x, y = U[:, j], V[:, j]
@@ -89,13 +110,30 @@ class NMF:
 
             H[H < eps] = 0
             W[W < eps] = 0
+
+            if self._init_method == 'nndsvda':
+                avg = self.X.mean()
+                H[H == 0] = avg
+                W[W == 0] = avg
+            elif self._init_method == 'nndsvdar':
+                avg = self.X.mean()
+                torch.manual_seed(self._random_state)
+                H[H == 0] = avg / 100 * torch.rand(H[H==0].shape)
+                W[W == 0] = avg / 100 * torch.rand(W[W==0].shape)
+        elif self._init_method == 'random':
+            rng = torch.Generator().manual_seed(self._random_state)
+
+            avg = torch.sqrt(self.X.mean() / self.k)
+            H = torch.abs(avg * torch.rand((self.X.shape[0], self.k), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
+            W = torch.abs(avg * torch.rand((self.k, self.X.shape[1]), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
         else:
-            H = torch.rand((self.X.shape[0], self.k), dtype=self._tensor_dtype, device=self._device_type)
-            W = torch.rand((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type)
+            raise ValueError(f"Invalid init parameter. Got {self._init_method}, but require one of (None, 'nndsvd', 'nndsvda', 'nndsvdar', 'random').")
         
         self.H = H
         self.W = W
-        self._update_loss(self._get_X_hat())
+
+        self._init_err = self._loss(self.X, self._get_HW(), self._beta, self._epsilon, square_root=True)
+        self._prev_err = self._init_err
 
     @torch.no_grad()
     def fit(self, X):
@@ -108,29 +146,31 @@ class NMF:
         assert torch.sum(X<0) == 0, "The input matrix is not non-negative. NMF cannot be applied."
 
         self.X = X
-        self._initialize_W_H()
+        self._initialize_HW()
 
         for i in range(self._max_iter):
-            if self._is_converged():
-                self.num_iters = i
-                print(f"    Reach convergence after {i+1} iteration(s).")
-                break
+            if (i + 1) % 10 == 0:
+                self._cur_err = self._loss(self.X, self._get_HW(), self._beta, self._epsilon, square_root=True)
+                if self._is_converged():
+                    self.num_iters = i + 1
+                    print(f"    Reach convergence after {i+1} iteration(s).")
+                    break
 
             # Batch update on H.
             W_t = self.W.T
-            X_hat = self._get_X_hat()
-            H_factor_numer = (self.X * X_hat.pow(self._beta - 2)) @ W_t
-            H_factor_denom = X_hat.pow(self._beta - 1) @ W_t
+            HW = self._get_HW()
+            HW_pow = HW.pow(self._beta - 2)
+            H_factor_numer = (self.X * HW_pow) @ W_t
+            H_factor_denom = (HW_pow * HW) @ W_t
             self.H *= (H_factor_numer / H_factor_denom)
 
             # Batch update on W.
             H_t = self.H.T
-            X_hat = self._get_X_hat()
-            W_factor_numer = H_t @ (self.X * X_hat.pow(self._beta - 2))
-            W_factor_denom = H_t @ X_hat.pow(self._beta - 1)
+            HW = self._get_HW()
+            HW_pow = HW.pow(self._beta - 2)
+            W_factor_numer = H_t @ (self.X * HW_pow)
+            W_factor_denom = H_t @ (HW_pow * HW)
             self.W *= (W_factor_numer / W_factor_denom)
-
-            self._update_loss(self._get_X_hat())
 
             if i == self._max_iter - 1:
                 self.num_iters = self._max_iter
