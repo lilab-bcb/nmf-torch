@@ -1,7 +1,10 @@
 import torch
 
 class NMF:
-    def __init__(self, n_components, init='nndsvd', loss='frobenius', beta = 2, max_iter=200, tol=1e-4, random_state=0, alpha=0.0, l1_ratio=0.0, fp_precision='float', use_gpu=False):
+    def __init__(self, n_components, init='nndsvd', loss='frobenius', 
+                 beta = 2, max_iter=200, tol=1e-4, random_state=0, 
+                 alpha_W=0.0, l1_ratio_W=0.0, alpha_H=0.0, l1_ratio_H=0.0,
+                 fp_precision='float', use_gpu=False):
         self.k = n_components
 
         if loss == 'frobenius':
@@ -12,6 +15,21 @@ class NMF:
             self._beta = 0
         else:
             self._beta = beta
+
+        self._l1_reg_H = alpha_H * l1_ratio_H
+        self._l2_reg_H = alpha_H * (1 - l1_ratio_H)
+        self._l1_reg_W = alpha_W * l1_ratio_W
+        self._l2_reg_W = alpha_W * (1 - l1_ratio_W)
+
+        if (self._beta > 1 and self._beta < 2) and (self._l1_reg_H > 0 or self._l1_reg_W > 0):
+            print("L1 norm doesn't have a closed form solution when 1 < beta < 2. Ignore L1 regularization.")
+            self._l1_reg_H = 0
+            self._l1_reg_W = 0
+
+        if self._beta != 2 and (self._l2_reg_H > 0 or self._l2_reg_W > 0):
+            print("L2 norm doesn't have a closed form solution when beta != 2. Ignore L2 regularization.")
+            self._l2_reg_H = 0
+            self._l2_reg_W = 0
 
         if fp_precision == 'float':
             self._tensor_dtype = torch.float
@@ -39,28 +57,32 @@ class NMF:
     def reconstruction_err(self):
         return self._cur_err
 
-    @staticmethod
-    def _loss(X, Y, beta, epsilon, square_root=False):
-        if beta == 2:
+    def _loss(self, X, Y, square_root=False):
+        if self._beta == 2:
             res = torch.sum((X - Y)**2) / 2
-        if beta == 0 or beta == 1:
+        if self._beta == 0 or self._beta == 1:
             X_flat = X.flatten()
             Y_flat = Y.flatten()
 
-            idx = X_flat > epsilon
+            idx = X_flat > self._epsilon
             X_flat = X_flat[idx]
             Y_flat = Y_flat[idx]
 
             # Avoid division by zero
-            Y_flat[Y_flat == 0] = epsilon
+            Y_flat[Y_flat == 0] = self._epsilon
 
             x_div_y = X_flat / Y_flat
-            if beta == 0:
+            if self._beta == 0:
                 res = x_div_y.sum() - x_div_y.log().sum() - X.shape.numel()
             else:
                 res = X_flat @ x_div_y.log() - X_flat.sum() + Y.sum()
         else:
-            res = torch.sum(X.pow(beta) - beta * X * Y.pow(beta - 1) + (beta - 1) * Y.pow(beta)) / (beta * (beta - 1))
+            res = torch.sum(X.pow(self._beta) - self._beta * X * Y.pow(self._beta - 1) + (self._beta - 1) * Y.pow(self._beta))
+            res /= (self._beta * (self._beta - 1))
+
+        # Add regularization terms.
+        res += self._l1_reg_H * self.H.norm(p=1) + self._l2_reg_H * self.H.norm(p=2)**2 / 2
+        res += self._l1_reg_W * self.W.norm(p=1) + self._l2_reg_W * self.W.norm(p=2)**2 / 2
 
         if square_root:
             return torch.sqrt(2 * res)
@@ -135,7 +157,7 @@ class NMF:
         self.H = H
         self.W = W
 
-        self._init_err = self._loss(self.X, self._get_HW(), self._beta, self._epsilon, square_root=True)
+        self._init_err = self._loss(self.X, self._get_HW(), square_root=True)
         self._prev_err = self._init_err
 
     @torch.no_grad()
@@ -153,7 +175,7 @@ class NMF:
 
         for i in range(self._max_iter):
             if (i + 1) % 10 == 0:
-                self._cur_err = self._loss(self.X, self._get_HW(), self._beta, self._epsilon, square_root=True)
+                self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
                 if self._is_converged():
                     self.num_iters = i + 1
                     print(f"    Reach convergence after {i+1} iteration(s).")
@@ -170,6 +192,18 @@ class NMF:
                 HW_pow = HW.pow(self._beta - 2)
                 H_factor_numer = (self.X * HW_pow) @ W_t
                 H_factor_denom = (HW_pow * HW) @ W_t
+            
+            # Add regularization terms to H.
+            if self._l1_reg_H > 0:
+                if self._beta <= 1:
+                    H_factor_denom += self._l1_reg_H
+                else:
+                    H_factor_numer -= self._l1_reg_H
+                    H_factor_numer[H_factor_numer < 0] = 0
+
+            if self._l2_reg_H > 0:
+                H_factor_denom += self._l2_reg_H * self.H
+
             H_factor_denom[H_factor_denom == 0] = self._epsilon
             self.H *= (H_factor_numer / H_factor_denom)
 
@@ -184,12 +218,20 @@ class NMF:
                 HW_pow = HW.pow(self._beta - 2)
                 W_factor_numer = H_t @ (self.X * HW_pow)
                 W_factor_denom = H_t @ (HW_pow * HW)
+            
+            # Add regularization terms to W.
+            if self._l2_reg_W > 0:
+                if self._beta <= 1:
+                    W_factor_denom += self._l1_reg_W
+                else:
+                    W_factor_numer -= self._l1_reg_W
+                    W_factor_numer[W_factor_numer < 0] = 0
+            
+            if self._l2_reg_W > 0:
+                W_factor_denom += self._l2_reg_W * self.W
+
             W_factor_denom[W_factor_denom == 0] = self._epsilon
-            self.W *= (W_factor_numer / W_factor_denom)
-
-            # Debug
-            #err_dbg = self._loss(self.X, self._get_HW(), self._beta, self._epsilon, square_root=True)
-
+            self.W *= (W_factor_numer / W_factor_denom)            
 
             if i == self._max_iter - 1:
                 self.num_iters = self._max_iter
