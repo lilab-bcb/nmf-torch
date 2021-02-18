@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 
 class NMF:
@@ -42,6 +41,8 @@ class NMF:
 
     @staticmethod
     def _loss(X, Y, beta, epsilon, square_root=False):
+        if beta == 2:
+            res = torch.sum((X - Y)**2) / 2
         if beta == 0 or beta == 1:
             X_flat = X.flatten()
             Y_flat = Y.flatten()
@@ -87,14 +88,16 @@ class NMF:
         if self._init_method in ['nndsvd', 'nndsvda', 'nndsvdar']:
             torch.manual_seed(self._random_state)
             U, S, V = torch.svd_lowrank(self.X, q=self.k)
-            H, W= torch.zeros_like(U), torch.zeros_like(V.T)
+
+            H= torch.zeros_like(U, device=self._device_type)
+            W = torch.zeros_like(V.T, device=self._device_type)
             H[:, 0] = S[0].sqrt() * U[:, 0]
             W[0, :] = S[0].sqrt() * V[:, 0]
 
             for j in range(2, self.k):
                 x, y = U[:, j], V[:, j]
-                x_p, y_p = x.maximum(torch.zeros_like(x)), y.maximum(torch.zeros_like(y))
-                x_n, y_n = x.minimum(torch.zeros_like(x)).abs(), y.minimum(torch.zeros_like(y)).abs()
+                x_p, y_p = x.maximum(torch.zeros_like(x, device=self._device_type)), y.maximum(torch.zeros_like(y, device=self._device_type))
+                x_n, y_n = x.minimum(torch.zeros_like(x, device=self._device_type)).abs(), y.minimum(torch.zeros_like(y, device=self._device_type)).abs()
                 x_p_nrm, y_p_nrm = x_p.norm(p=2), y_p.norm(p=2)
                 x_n_nrm, y_n_nrm = x_n.norm(p=2), y_n.norm(p=2)
                 m_p, m_n = x_p_nrm * y_p_nrm, x_n_nrm * y_n_nrm
@@ -124,8 +127,8 @@ class NMF:
             rng = torch.Generator().manual_seed(self._random_state)
 
             avg = torch.sqrt(self.X.mean() / self.k)
-            H = torch.abs(avg * torch.rand((self.X.shape[0], self.k), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
-            W = torch.abs(avg * torch.rand((self.k, self.X.shape[1]), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
+            H = torch.abs(avg * torch.randn((self.X.shape[0], self.k), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
+            W = torch.abs(avg * torch.randn((self.k, self.X.shape[1]), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
         else:
             raise ValueError(f"Invalid init parameter. Got {self._init_method}, but require one of (None, 'nndsvd', 'nndsvda', 'nndsvdar', 'random').")
         
@@ -158,19 +161,35 @@ class NMF:
 
             # Batch update on H.
             W_t = self.W.T
-            HW = self._get_HW()
-            HW_pow = HW.pow(self._beta - 2)
-            H_factor_numer = (self.X * HW_pow) @ W_t
-            H_factor_denom = (HW_pow * HW) @ W_t
+            if self._beta == 2:
+                WWT = self.W @ W_t
+                H_factor_numer = self.X @ W_t
+                H_factor_denom = self.H @ WWT
+            else:
+                HW = self._get_HW()
+                HW_pow = HW.pow(self._beta - 2)
+                H_factor_numer = (self.X * HW_pow) @ W_t
+                H_factor_denom = (HW_pow * HW) @ W_t
+            H_factor_denom[H_factor_denom == 0] = self._epsilon
             self.H *= (H_factor_numer / H_factor_denom)
 
             # Batch update on W.
             H_t = self.H.T
-            HW = self._get_HW()
-            HW_pow = HW.pow(self._beta - 2)
-            W_factor_numer = H_t @ (self.X * HW_pow)
-            W_factor_denom = H_t @ (HW_pow * HW)
+            if self._beta == 2.0:
+                HTH = H_t @ self.H
+                W_factor_numer = H_t @ self.X
+                W_factor_denom = HTH @ self.W
+            else:
+                HW = self._get_HW()
+                HW_pow = HW.pow(self._beta - 2)
+                W_factor_numer = H_t @ (self.X * HW_pow)
+                W_factor_denom = H_t @ (HW_pow * HW)
+            W_factor_denom[W_factor_denom == 0] = self._epsilon
             self.W *= (W_factor_numer / W_factor_denom)
+
+            # Debug
+            #err_dbg = self._loss(self.X, self._get_HW(), self._beta, self._epsilon, square_root=True)
+
 
             if i == self._max_iter - 1:
                 self.num_iters = self._max_iter
