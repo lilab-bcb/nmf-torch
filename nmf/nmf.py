@@ -108,11 +108,11 @@ class NMF:
                 self._init_method = 'random'
         
         if self._init_method in ['nndsvd', 'nndsvda', 'nndsvdar']:
-            torch.manual_seed(self._random_state)
+            torch.Generator(device=self._device_type).manual_seed(self._random_state)
             U, S, V = torch.svd_lowrank(self.X, q=self.k)
 
-            H= torch.zeros_like(U, device=self._device_type)
-            W = torch.zeros_like(V.T, device=self._device_type)
+            H= torch.zeros_like(U, dtype=self._tensor_dtype, device=self._device_type)
+            W = torch.zeros_like(V.T, dtype=self._tensor_dtype, device=self._device_type)
             H[:, 0] = S[0].sqrt() * U[:, 0]
             W[0, :] = S[0].sqrt() * V[:, 0]
 
@@ -142,13 +142,12 @@ class NMF:
                 W[W == 0] = avg
             elif self._init_method == 'nndsvdar':
                 avg = self.X.mean()
-                torch.manual_seed(self._random_state)
-                H[H == 0] = avg / 100 * torch.rand(H[H==0].shape)
-                W[W == 0] = avg / 100 * torch.rand(W[W==0].shape)
+                rng = torch.Generator(device=self._device_type).manual_seed(self._random_state)
+                H[H == 0] = avg / 100 * torch.rand(H[H==0].shape, generator=rng, device=self._device_type)
+                W[W == 0] = avg / 100 * torch.rand(W[W==0].shape, generator=rng, device=self._device_type)
         elif self._init_method == 'random':
-            rng = torch.Generator().manual_seed(self._random_state)
-
             avg = torch.sqrt(self.X.mean() / self.k)
+            rng = torch.Generator(device=self._device_type).manual_seed(self._random_state)
             H = torch.abs(avg * torch.randn((self.X.shape[0], self.k), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
             W = torch.abs(avg * torch.randn((self.k, self.X.shape[1]), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
         else:
@@ -164,8 +163,9 @@ class NMF:
     def fit(self, X):
         if not isinstance(X, torch.Tensor):
             X = torch.tensor(X, dtype=self._tensor_dtype, device=self._device_type)
-        elif X.dtype != self._tensor_dtype:
-            X = X.type(self._tensor_dtype)
+        else: 
+            if X.dtype != self._tensor_dtype:
+                X = X.type(self._tensor_dtype)
             if self._device_type == 'cuda' and (not X.is_cuda):
                 X = X.to(device=self._device_type)
         assert torch.sum(X<0) == 0, "The input matrix is not non-negative. NMF cannot be applied."
