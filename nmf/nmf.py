@@ -159,6 +159,59 @@ class NMF:
         self._init_err = self._loss(self.X, self._get_HW(), square_root=True)
         self._prev_err = self._init_err
 
+    def _add_regularization_terms(self, mat, numer_mat, denom_mat, l1_reg, l2_reg):
+        if l1_reg > 0:
+            if self._beta <= 1:
+                denom_mat += l1_reg
+            else:
+                numer_mat -= l1_reg
+                numer_mat[numer_mat < 0] = 0
+
+        if l2_reg > 0:
+            denom_mat += l2_reg * mat
+
+    def _online_update_H(self):
+        W_t = self.W.T
+        WWT = self.W @ W_t
+        H_factor_numer = self.X @ W_t
+        H_factor_denom = self.H @ WWT
+
+        self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
+        H_factor_denom[H_factor_denom == 0] = self._epsilon
+        self.H *= (H_factor_numer / H_factor_denom)
+
+    def _batch_update_H(self):
+        W_t = self.W.T
+        HW = self._get_HW()
+        HW_pow = HW.pow(self._beta - 2)
+        H_factor_numer = (self.X * HW_pow) @ W_t
+        H_factor_denom = (HW_pow * HW) @ W_t
+
+        self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
+        H_factor_denom[H_factor_denom == 0] = self._epsilon
+        self.H *= (H_factor_numer / H_factor_denom)
+
+    def _online_update_W(self):
+        H_t = self.H.T
+        HTH = H_t @ self.H
+        W_factor_numer = H_t @ self.X
+        W_factor_denom = HTH @ self.W
+
+        self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
+        W_factor_denom[W_factor_denom == 0] = self._epsilon
+        self.W *= (W_factor_numer / W_factor_denom)
+
+    def _batch_update_W(self):
+        H_t = self.H.T
+        HW = self._get_HW()
+        HW_pow = HW.pow(self._beta - 2)
+        W_factor_numer = H_t @ (self.X * HW_pow)
+        W_factor_denom = H_t @ (HW_pow * HW)
+
+        self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
+        W_factor_denom[W_factor_denom == 0] = self._epsilon
+        self.W *= (W_factor_numer / W_factor_denom) 
+
     @torch.no_grad()
     def fit(self, X):
         if not isinstance(X, torch.Tensor):
@@ -181,57 +234,17 @@ class NMF:
                     print(f"    Reach convergence after {i+1} iteration(s).")
                     break
 
-            # Batch update on H.
-            W_t = self.W.T
+            # Update H.
             if self._beta == 2:
-                WWT = self.W @ W_t
-                H_factor_numer = self.X @ W_t
-                H_factor_denom = self.H @ WWT
+                self._online_update_H()
             else:
-                HW = self._get_HW()
-                HW_pow = HW.pow(self._beta - 2)
-                H_factor_numer = (self.X * HW_pow) @ W_t
-                H_factor_denom = (HW_pow * HW) @ W_t
-            
-            # Add regularization terms to H.
-            if self._l1_reg_H > 0:
-                if self._beta <= 1:
-                    H_factor_denom += self._l1_reg_H
-                else:
-                    H_factor_numer -= self._l1_reg_H
-                    H_factor_numer[H_factor_numer < 0] = 0
+                self._batch_update_H()
 
-            if self._l2_reg_H > 0:
-                H_factor_denom += self._l2_reg_H * self.H
-
-            H_factor_denom[H_factor_denom == 0] = self._epsilon
-            self.H *= (H_factor_numer / H_factor_denom)
-
-            # Batch update on W.
-            H_t = self.H.T
-            if self._beta == 2.0:
-                HTH = H_t @ self.H
-                W_factor_numer = H_t @ self.X
-                W_factor_denom = HTH @ self.W
+            # Update W.
+            if self._beta == 2:
+                self._online_update_W()
             else:
-                HW = self._get_HW()
-                HW_pow = HW.pow(self._beta - 2)
-                W_factor_numer = H_t @ (self.X * HW_pow)
-                W_factor_denom = H_t @ (HW_pow * HW)
-            
-            # Add regularization terms to W.
-            if self._l2_reg_W > 0:
-                if self._beta <= 1:
-                    W_factor_denom += self._l1_reg_W
-                else:
-                    W_factor_numer -= self._l1_reg_W
-                    W_factor_numer[W_factor_numer < 0] = 0
-            
-            if self._l2_reg_W > 0:
-                W_factor_denom += self._l2_reg_W * self.W
-
-            W_factor_denom[W_factor_denom == 0] = self._epsilon
-            self.W *= (W_factor_numer / W_factor_denom)            
+                self._batch_update_W()         
 
             if i == self._max_iter - 1:
                 self.num_iters = self._max_iter
