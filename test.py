@@ -56,7 +56,7 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
 
     model1 = sd.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state, solver='mu',
                     alpha=alpha, l1_ratio=l1_ratio)
-    model2 = nmf.NMF(n_components=k, init=init, loss=loss, tol=tol, max_iter=max_iter, random_state=random_state,
+    model2 = nmf.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state,
                      alpha_H=alpha, l1_ratio_H=l1_ratio, alpha_W=alpha, l1_ratio_W=l1_ratio)
 
     cprint("Sklearn:", 'green')
@@ -81,7 +81,7 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
 
 if __name__ == '__main__':
     cprint("Test 1:", 'yellow')
-    run_test("tests/data/nmf_test_1.npy", k=12, loss='frobenius', init='random', max_iter=500, alpha=50, l1_ratio=0.0)
+    run_test("tests/data/nmf_test_1.npy", k=12, loss='frobenius', init='random', max_iter=500)
 
     cprint("Test 2:", 'yellow')
-    run_test("tests/data/nmf_test_2.npy", k=12, loss='frobenius', init='random', max_iter=500, alpha=50, l1_ratio=0.0)
+    run_test("tests/data/nmf_test_2.npy", k=12, loss='frobenius', init='random', max_iter=500)

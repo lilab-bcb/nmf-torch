@@ -1,20 +1,35 @@
 import torch
+from typing import Optional, Union
 
 class NMF:
-    def __init__(self, n_components, init='nndsvd', loss='frobenius', 
-                 beta = 2, max_iter=200, tol=1e-4, random_state=0, 
-                 alpha_W=0.0, l1_ratio_W=0.0, alpha_H=0.0, l1_ratio_H=0.0,
-                 fp_precision='float', use_gpu=False):
+    def __init__(
+        self,
+        n_components: int,
+        init: str = "nndsvd", 
+        beta_loss: Union[str, float] = "frobenius", 
+        max_iter: int = 200, 
+        tol: float = 1e-4, 
+        random_state: int = 0, 
+        alpha_W: float = 0.0, 
+        l1_ratio_W: float = 0.0, 
+        alpha_H:float = 0.0, 
+        l1_ratio_H:float = 0.0,
+        fp_precision: str = 'float',
+        chunk_size: int = 2000,
+        use_gpu: bool = False,
+    ):
         self.k = n_components
 
-        if loss == 'frobenius':
+        if beta_loss == 'frobenius':
             self._beta = 2
-        if loss == 'kullback-leibler':
+        elif beta_loss == 'kullback-leibler':
             self._beta = 1
-        elif loss == 'itakura-saito':
+        elif beta_loss == 'itakura-saito':
             self._beta = 0
+        elif isinstance(beta_loss, int) or isinstance(beta_loss, float):
+            self._beta = beta_loss
         else:
-            self._beta = beta
+            raise ValueError("beta_loss must be a valid value: either from ['frobenius', 'kullback-leibler', 'itakura-saito'], or a numeric value.")
 
         self._l1_reg_H = alpha_H * l1_ratio_H
         self._l2_reg_H = alpha_H * (1 - l1_ratio_H)
@@ -39,6 +54,7 @@ class NMF:
             self._tensor_dtype = fp_precision
         
         self._epsilon = torch.finfo(self._tensor_dtype).eps
+        self._chunk_size = chunk_size
 
         self._device_type = 'cpu'
         if use_gpu:
@@ -99,7 +115,7 @@ class NMF:
     def _get_HW(self):
         return self.H @ self.W
 
-    def _initialize_HW(self, eps=1e-6):
+    def _initialize_H_W(self, eps=1e-6):
         n_samples, n_features = self.X.shape
         if self._init_method is None:
             if self.k < min(n_samples, n_features):
@@ -170,36 +186,83 @@ class NMF:
         if l2_reg > 0:
             denom_mat += l2_reg * mat
 
-    def _online_update_H(self):
-        W_t = self.W.T
-        WWT = self.W @ W_t
-        H_factor_numer = self.X @ W_t
-        H_factor_denom = self.H @ WWT
+    def _online_update_one_pass(self):
+        indices = torch.randperm(self.X.shape[0], device=self._device_type)
+        A = torch.zeros((self.k, self.k), dtype=self._tensor_dtype, device=self._device_type)
+        B = torch.zeros((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type)
 
-        self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
-        H_factor_denom[H_factor_denom == 0] = self._epsilon
-        self.H *= (H_factor_numer / H_factor_denom)
+        i = 0
+        t = 0
+        while i < indices.shape[0]:
+            t += 1
+            idx = indices[i:(i+self._chunk_size)]
+            x = self.X[idx, :]
+            h = self.H[idx, :]
+
+            # Online update H.
+            W_t = self.W.T
+            WWT = self.W @ W_t
+            h_factor_numer = x @ W_t
+            h_factor_denom = h @ WWT
+
+            self._add_regularization_terms(h, h_factor_numer, h_factor_denom, self._l1_reg_H, self._l2_reg_H)
+            h_factor_denom[h_factor_denom == 0] = self._epsilon
+            h *= (h_factor_numer / h_factor_denom)
+            
+            # Update sufficient statistics A and B.
+            h_t = h.T
+            A *= t - 1
+            A += h_t @ h
+            A /= t
+
+            B *= t - 1
+            B += h_t @ x
+            B /= t
+
+            # Online update W.
+            W_factor_numer = B
+            W_factor_denom = A @ self.W
+
+            self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
+            W_factor_denom[W_factor_denom == 0] = self._epsilon
+            self.W *= (W_factor_numer / W_factor_denom)
+
+            i += self._chunk_size
+
+    def _online_update_H_W(self):
+        self._chunk_size = min(self.X.shape[0], self._chunk_size)
+
+        for i in range(self._max_iter):
+            if (i + 1) % 10 == 0:
+                self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
+                print(self._cur_err)
+                if self._is_converged():
+                    self.num_iters = i + 1
+                    print(f"    Reach convergence after {i+1} iteration(s).")
+                    break
+            
+            self._online_update_one_pass()
+
+            if i == self._max_iter - 1:
+                self.num_iters = self._max_iter
+                print(f"    Not converged after {self._max_iter} iteration(s).")
 
     def _batch_update_H(self):
         W_t = self.W.T
-        HW = self._get_HW()
-        HW_pow = HW.pow(self._beta - 2)
-        H_factor_numer = (self.X * HW_pow) @ W_t
-        H_factor_denom = (HW_pow * HW) @ W_t
+
+        if self._beta == 2:
+            WWT = self.W @ W_t
+            H_factor_numer = self.X @ W_t
+            H_factor_denom = self.H @ WWT
+        else:
+            HW = self._get_HW()
+            HW_pow = HW.pow(self._beta - 2)
+            H_factor_numer = (self.X * HW_pow) @ W_t
+            H_factor_denom = (HW_pow * HW) @ W_t
 
         self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
         H_factor_denom[H_factor_denom == 0] = self._epsilon
         self.H *= (H_factor_numer / H_factor_denom)
-
-    def _online_update_W(self):
-        H_t = self.H.T
-        HTH = H_t @ self.H
-        W_factor_numer = H_t @ self.X
-        W_factor_denom = HTH @ self.W
-
-        self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
-        W_factor_denom[W_factor_denom == 0] = self._epsilon
-        self.W *= (W_factor_numer / W_factor_denom)
 
     def _batch_update_W(self):
         H_t = self.H.T
@@ -211,6 +274,22 @@ class NMF:
         self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
         W_factor_denom[W_factor_denom == 0] = self._epsilon
         self.W *= (W_factor_numer / W_factor_denom) 
+
+    def _batch_update_H_W(self):
+        for i in range(self._max_iter):
+            if (i + 1) % 10 == 0:
+                self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
+                if self._is_converged():
+                    self.num_iters = i + 1
+                    print(f"    Reach convergence after {i+1} iteration(s).")
+                    break
+
+            self._batch_update_H()
+            self._batch_update_W()  
+
+            if i == self._max_iter - 1:
+                self.num_iters = self._max_iter
+                print(f"    Not converged after {self._max_iter} iteration(s).")
 
     @torch.no_grad()
     def fit(self, X):
@@ -224,31 +303,12 @@ class NMF:
         assert torch.sum(X<0) == 0, "The input matrix is not non-negative. NMF cannot be applied."
 
         self.X = X
-        self._initialize_HW()
+        self._initialize_H_W()
 
-        for i in range(self._max_iter):
-            if (i + 1) % 10 == 0:
-                self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
-                if self._is_converged():
-                    self.num_iters = i + 1
-                    print(f"    Reach convergence after {i+1} iteration(s).")
-                    break
-
-            # Update H.
-            if self._beta == 2:
-                self._online_update_H()
-            else:
-                self._batch_update_H()
-
-            # Update W.
-            if self._beta == 2:
-                self._online_update_W()
-            else:
-                self._batch_update_W()         
-
-            if i == self._max_iter - 1:
-                self.num_iters = self._max_iter
-                print(f"    Not converged after {self._max_iter} iteration(s).")
+        if self._beta == 2:
+            self._online_update_H_W()
+        else:
+            self._batch_update_H_W()
     
     def fit_transform(self, X):
         self.fit(X)
