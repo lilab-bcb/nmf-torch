@@ -81,7 +81,7 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
 
 if __name__ == '__main__':
     cprint("Test 1:", 'yellow')
-    run_test("tests/data/nmf_test_1.npy", k=12, loss='frobenius', init='random', max_iter=500, alpha=50, l1_ratio=0.0)
+    run_test("tests/data/nmf_test_1.npy", k=12, loss='frobenius', init='random', max_iter=100)
 
     cprint("Test 2:", 'yellow')
-    run_test("tests/data/nmf_test_2.npy", k=12, loss='frobenius', init='random', max_iter=500, alpha=50, l1_ratio=0.0)
+    run_test("tests/data/nmf_test_2.npy", k=12, loss='frobenius', init='random', max_iter=100)

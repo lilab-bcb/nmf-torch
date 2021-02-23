@@ -81,8 +81,14 @@ class NMF:
             res /= (self._beta * (self._beta - 1))
 
         # Add regularization terms.
-        res += self._l1_reg_H * self.H.norm(p=1) + self._l2_reg_H * self.H.norm(p=2)**2 / 2
-        res += self._l1_reg_W * self.W.norm(p=1) + self._l2_reg_W * self.W.norm(p=2)**2 / 2
+        if self._l1_reg_H > 0:
+            res += self._l1_reg_H * self.H.norm(p=1)
+        if self._l2_reg_H > 0:
+            res += self._l2_reg_H * self.H.norm(p=2)**2 / 2
+        if self._l1_reg_W > 0:
+            res += self._l1_reg_W * self.W.norm(p=1)
+        if self._l2_reg_W > 0:
+            res += self._l2_reg_W * self.W.norm(p=2)**2 / 2
 
         if square_root:
             return torch.sqrt(2 * res)
