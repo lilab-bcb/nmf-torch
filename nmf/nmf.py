@@ -60,7 +60,7 @@ class NMF:
     def _loss(self, X, Y, square_root=False):
         if self._beta == 2:
             res = torch.sum((X - Y)**2) / 2
-        if self._beta == 0 or self._beta == 1:
+        elif self._beta == 0 or self._beta == 1:
             X_flat = X.flatten()
             Y_flat = Y.flatten()
 
