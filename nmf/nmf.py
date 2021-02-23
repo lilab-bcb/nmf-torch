@@ -239,17 +239,15 @@ class NMF:
         self._chunk_size = min(self.X.shape[0], self._chunk_size)
 
         for i in range(self._max_iter):
-            if (i + 1) % 10 == 0:
-                self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
-                print(self._cur_err)
-                if self._is_converged():
-                    self.num_iters = i + 1
-                    print(f"    Reach convergence after {i+1} iteration(s).")
-                    break
-            
             self._online_update_one_pass()
 
-            if i == self._max_iter - 1:
+            self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
+            print(self._cur_err)
+            if self._is_converged():
+                self.num_iters = i + 1
+                print(f"    Reach convergence after {i+1} iteration(s).")
+                break
+            elif i == self._max_iter - 1:
                 self.num_iters = self._max_iter
                 print(f"    Not converged after {self._max_iter} iteration(s).")
 
