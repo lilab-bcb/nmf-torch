@@ -1,14 +1,16 @@
 import numpy as np
 import sklearn.decomposition as sd
+import gensim.models.nmf as gm
 import nmf
 import time
 import torch
 
+from scipy.sparse import csc_matrix
 from termcolor import cprint
 
 EPSILON = torch.finfo(torch.float32).eps
 
-def beta_loss(X, Y, H, W, beta, epsilon, l1_reg_H, l2_reg_H, l1_reg_W, l2_reg_W, square_root=False):
+def beta_loss(X, Y, H, W, beta, epsilon, l1_reg_H=0., l2_reg_H=0., l1_reg_W=0., l2_reg_W=0., square_root=False):
         if beta == 2:
             res = torch.sum((X - Y)**2) / 2
         if beta == 0 or beta == 1:
@@ -54,10 +56,21 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
     else:
         raise ValueError("Beta loss not supported!")
 
+    p = zip(range(X.shape[1]), map(lambda n: 'gene'+str(n), range(X.shape[1])))
+    id2word = {}
+    for key, val in p:
+        id2word[key] = val
+    model0 = gm.Nmf(num_topics=k, id2word=id2word, eval_every=1, chunksize=1000)
     model1 = sd.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state, solver='mu',
                     alpha=alpha, l1_ratio=l1_ratio)
     model2 = nmf.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state,
                      alpha_H=alpha, l1_ratio_H=l1_ratio, alpha_W=alpha, l1_ratio_W=l1_ratio)
+
+    cprint("Gensim:", 'green')
+    ts_start = time.time()
+    model0.update(csc_matrix(X.T))
+    ts_end = time.time()
+    print(f"Gensim uses {ts_end - ts_start} s.")
 
     cprint("Sklearn:", 'green')
     print(model1)
@@ -80,8 +93,8 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
     print(f"H has {torch.sum(model2.H!=0).tolist()} non-zero elements, W has {torch.sum(model2.W!=0).tolist()} non-zero elements.")
 
 if __name__ == '__main__':
-    cprint("Test 1:", 'yellow')
-    run_test("tests/data/nmf_test_1.npy", k=12, loss='frobenius', init='random', max_iter=100)
+    #cprint("Test 1:", 'yellow')
+    #run_test("tests/data/nmf_test_1.npy", k=12, loss='frobenius', init='random', max_iter=100)
 
     cprint("Test 2:", 'yellow')
     run_test("tests/data/nmf_test_2.npy", k=12, loss='frobenius', init='random', max_iter=100)

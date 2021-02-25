@@ -111,11 +111,10 @@ class NMF:
         else:
             return res
     
-    def _is_converged(self):
-        if torch.abs((self._prev_err - self._cur_err) / self._init_err) < self._tol:
+    def _is_converged(self, prev_err, cur_err, init_err):
+        if torch.abs((prev_err - cur_err) / init_err) < self._tol:
             return True
         else:
-            self._prev_err = self._cur_err
             return False
 
     def _get_HW(self):
@@ -204,16 +203,29 @@ class NMF:
             idx = indices[i:(i+self._chunk_size)]
             x = self.X[idx, :]
             h = self.H[idx, :]
+            self._init_h_err = self._loss(x, h @ self.W, square_root=True)
+            self._prev_h_err = self._init_h_err
 
             # Online update H.
             W_t = self.W.T
             WWT = self.W @ W_t
             h_factor_numer = x @ W_t
-            h_factor_denom = h @ WWT
 
-            self._add_regularization_terms(h, h_factor_numer, h_factor_denom, self._l1_reg_H, self._l2_reg_H)
-            h_factor_denom[h_factor_denom == 0] = self._epsilon
-            h *= (h_factor_numer / h_factor_denom)
+            for j in torch.arange(50):
+                h_factor_denom = h @ WWT
+
+                self._add_regularization_terms(h, h_factor_numer, h_factor_denom, self._l1_reg_H, self._l2_reg_H)
+                h_factor_denom[h_factor_denom == 0] = self._epsilon
+                h *= (h_factor_numer / h_factor_denom)
+
+                self._cur_h_err = self._loss(x, h @ self.W, square_root=True)
+                if self._is_converged(self._prev_h_err, self._cur_h_err, self._init_h_err):
+                    print(f"    H reaches convergence after {j+1} iteration(s).")
+                    break
+                elif j == 49:
+                    break
+                else:
+                    self._prev_h_err = self._cur_h_err
             
             # Update sufficient statistics A and B.
             h_t = h.T
@@ -227,11 +239,24 @@ class NMF:
 
             # Online update W.
             W_factor_numer = B
-            W_factor_denom = A @ self.W
+            self._init_W_err = self._loss(self.X, self._get_HW(), square_root=True)
+            self._prev_W_err = self._init_W_err
 
-            self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
-            W_factor_denom[W_factor_denom == 0] = self._epsilon
-            self.W *= (W_factor_numer / W_factor_denom)
+            for j in torch.arange(50):
+                W_factor_denom = A @ self.W
+
+                self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
+                W_factor_denom[W_factor_denom == 0] = self._epsilon
+                self.W *= (W_factor_numer / W_factor_denom)
+
+                self._cur_W_err = self._loss(self.X, self._get_HW(), square_root=True)
+                if self._is_converged(self._prev_W_err, self._cur_W_err, self._init_W_err):
+                    print(f"    W reaches convergence after {j+1} iteration(s).")
+                    break
+                elif j == 49:
+                    break
+                else:
+                    self._prev_W_err = self._cur_W_err
 
             i += self._chunk_size
 
@@ -240,16 +265,17 @@ class NMF:
 
         for i in range(self._max_iter):
             self._online_update_one_pass()
-
-            self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
+            self._cur_err = self._cur_W_err
             print(self._cur_err)
-            if self._is_converged():
+            if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
                 print(f"    Reach convergence after {i+1} iteration(s).")
                 break
             elif i == self._max_iter - 1:
                 self.num_iters = self._max_iter
                 print(f"    Not converged after {self._max_iter} iteration(s).")
+            else:
+                self._prev_err = self._cur_err
 
     def _batch_update_H(self):
         W_t = self.W.T
@@ -283,10 +309,12 @@ class NMF:
         for i in range(self._max_iter):
             if (i + 1) % 10 == 0:
                 self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
-                if self._is_converged():
+                if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     print(f"    Reach convergence after {i+1} iteration(s).")
                     break
+                else:
+                    self._prev_err = self._cur_err
 
             self._batch_update_H()
             self._batch_update_W()  
