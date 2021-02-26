@@ -7,6 +7,7 @@ class NMF:
         n_components: int,
         init: str = "nndsvd", 
         beta_loss: Union[str, float] = "frobenius", 
+        method: str = "batch",
         max_iter: int = 200, 
         tol: float = 1e-4, 
         random_state: int = 0, 
@@ -32,6 +33,11 @@ class NMF:
             self._beta = beta_loss
         else:
             raise ValueError("beta_loss must be a valid value: either from ['frobenius', 'kullback-leibler', 'itakura-saito'], or a numeric value.")
+
+        if method in ['online', 'batch']:
+            self._method = method
+        else:
+            raise ValueError("method must be a valid value from ['online', 'batch'].")
 
         self._l1_reg_H = alpha_H * l1_ratio_H
         self._l2_reg_H = alpha_H * (1 - l1_ratio_H)
@@ -77,9 +83,9 @@ class NMF:
     def reconstruction_err(self):
         return self._cur_err
 
-    def _loss(self, X, Y, square_root=False):
+    def _loss(self, X, Y=None, WWT=None, HTH=None, H_t=None, XWT=None, square_root=False):
         if self._beta == 2:
-            res = torch.sum((X - Y)**2) / 2
+            res = torch.sum((X-Y)**2) / 2
         elif self._beta == 0 or self._beta == 1:
             X_flat = X.flatten()
             Y_flat = Y.flatten()
@@ -133,7 +139,7 @@ class NMF:
                 self._init_method = 'random'
         
         if self._init_method in ['nndsvd', 'nndsvda', 'nndsvdar']:
-            torch.Generator(device=self._device_type).manual_seed(self._random_state)
+            torch.manual_seed(self._random_state)
             U, S, V = torch.svd_lowrank(self.X, q=self.k)
 
             H= torch.zeros_like(U, dtype=self._tensor_dtype, device=self._device_type)
@@ -198,26 +204,24 @@ class NMF:
     def _W_err(self, A, B, WWT=None):
         W_t = self.W.T
         if WWT is None:
-            res = torch.sum(torch.trace(self.W @ W_t @ A) / 2 + torch.trace(B @ W_t))
-        else:
-            res = torch.sum(torch.trace(WWT @ A) / 2 + torch.trace(B @ W_t))
-        return res
+            WWT = self.W @ W_t
+        
+        return torch.sum(torch.trace(WWT @ A) / 2 - torch.trace(B @ W_t))
 
-    def _h_err(self, x, h, W_t, WWT):
-        h_t = h.T
-        hth = h_t @ h
-        return torch.sum(torch.trace(WWT @ hth) / 2 + torch.trace(h_t @ x @ W_t))
+    def _h_err(self, h_t, hth, WWT, xWT):
+        return torch.sum(torch.trace(WWT @ hth) / 2 - torch.trace(h_t @ xWT))
 
     def _online_update_one_pass(self):
         indices = torch.randperm(self.X.shape[0], device=self._device_type)
-        #indices = torch.arange(self.X.shape[0], device=self._device_type)
         A = torch.zeros((self.k, self.k), dtype=self._tensor_dtype, device=self._device_type)
         B = torch.zeros((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type)
 
         i = 0
-        t = 0
+        num_processed = 0
+        cnt = 0
+        import time
         while i < indices.shape[0]:
-            t += 1
+            cnt += 1
             idx = indices[i:(i+self._chunk_size)]
             cur_chunksize = idx.shape[0]
             x = self.X[idx, :]
@@ -226,9 +230,12 @@ class NMF:
             # Online update H.
             W_t = self.W.T
             WWT = self.W @ W_t
-            h_factor_numer = x @ W_t
+            xWT = x @ W_t
+            h_factor_numer = xWT.clone()
+            h_t = h.T
+            hth = h_t @ h
 
-            prev_h_err = self._h_err(x, h, W_t, WWT)
+            prev_h_err = self._h_err(h_t, hth, WWT, xWT)
 
             for j in torch.arange(self._h_max_iter):
                 h_factor_denom = h @ WWT
@@ -236,27 +243,29 @@ class NMF:
                 self._add_regularization_terms(h, h_factor_numer, h_factor_denom, self._l1_reg_H, self._l2_reg_H)
                 h_factor_denom[h_factor_denom == 0] = self._epsilon
                 h *= (h_factor_numer / h_factor_denom)
+                h_t = h.T
+                hth = h_t @ h
 
-                cur_h_err = self._h_err(x, h, W_t, WWT)
-                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
-                    #print(f"    H reaches convergence after {j+1} iteration(s).")
-                    break
-                elif j + 1 == self._h_max_iter:
-                    #print(f"    H not converged after {j+1} iteration(s).")
+                cur_h_err = self._h_err(h_t, hth, WWT, xWT)
+                if self._is_converged(prev_h_err, cur_h_err, prev_h_err) or (j + 1 == self._h_max_iter):
                     break
                 else:
                     prev_h_err = cur_h_err
+
+            self.H[idx, :] = h
             
             # Update sufficient statistics A and B.
-            h_t = h.T
-            num_processed = (t - 1) * self._chunk_size
-            A *= num_processed
-            A += h_t @ h
-            A /= (num_processed + cur_chunksize)
+            num_after = num_processed + cur_chunksize
 
+            A *= num_processed
+            A += hth
+            A /= num_after
+            
             B *= num_processed
             B += h_t @ x
-            B /= (num_processed + cur_chunksize)
+            B /= num_after
+
+            num_processed = num_after 
 
             # Online update W.
             W_factor_numer = B
@@ -270,59 +279,72 @@ class NMF:
                 self.W *= (W_factor_numer / W_factor_denom)
 
                 cur_W_err = self._W_err(A, B)
-                if self._is_converged(prev_W_err, cur_W_err, prev_W_err):
-                    #print(f"    W reaches convergence after {j+1} iteration(s).")
-                    break
-                elif j + 1 == self._w_max_iter:
-                    #print(f"    W not converged after {j+1} iteration(s).")
+                if self._is_converged(prev_W_err, cur_W_err, prev_W_err) or (j + 1 == self._w_max_iter):
                     break
                 else:
                     prev_W_err = cur_W_err
 
             i += self._chunk_size
 
+    def _online_update_H(self, W_t=None, WWT=None):
+        if W_t is None:
+            W_t = self.W.T
+
+        if WWT is None:
+            WWT = self.W @ W_t
+        
+        i = 0
+        sum_h_err = 0.
+        while i < self.H.shape[0]:
+            x = self.X[i:(i+self._chunk_size), :]
+            h = self.H[i:(i+self._chunk_size), :]
+        
+            xWT = x @ W_t
+            h_factor_numer = xWT.clone()
+            h_t = h.T
+            hth = h_t @ h
+            prev_h_err = self._h_err(h_t, hth, WWT, xWT)
+
+            for j in torch.arange(self._h_max_iter):
+                h_factor_denom = h @ WWT
+                self._add_regularization_terms(h, h_factor_numer, h_factor_denom, self._l1_reg_H, self._l2_reg_H)
+                h_factor_denom[h_factor_denom == 0] = self._epsilon
+                h *= (h_factor_numer / h_factor_denom)
+                h_t = h.T
+                hth = h_t @ h
+                cur_h_err = self._h_err(h_t, hth, WWT, xWT)
+                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    break
+                elif j + 1 == self._h_max_iter:
+                    break
+                else:
+                    prev_h_err = cur_h_err
+
+            sum_h_err += cur_h_err
+            i += self._chunk_size
+
+        return sum_h_err
+        
+
     def _online_update_H_W(self):
         self._chunk_size = min(self.X.shape[0], self._chunk_size)
-        torch.Generator(device=self._device_type).manual_seed(self._random_state)
 
         for i in range(self._max_iter):
             self._online_update_one_pass()
 
-            # Update H at the end of each pass.
-            W_t = self.W.T
-            WWT = self.W @ W_t
-            H_factor_numer = self.X @ W_t
-            prev_H_err = self._h_err(self.X, self.H, W_t, WWT)
+            # Update H again at the end of each pass.
+            H_err = self._online_update_H()
 
-            for j in torch.arange(self._h_max_iter):
-                H_factor_denom = self.H @ WWT
-
-                self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
-                H_factor_denom[H_factor_denom == 0] = self._epsilon
-                self.H *= (H_factor_numer / H_factor_denom)
-
-                cur_H_err = self._h_err(self.X, self.H, W_t, WWT)
-                if self._is_converged(prev_H_err, cur_H_err, prev_H_err):
-                    #print(f"    Final H reaches convergence after {j+1} iteration(s).")
-                    break
-                elif j + 1== self._h_max_iter:
-                    break
-                else:
-                    prev_H_err = cur_H_err
-
-            self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
+            self._cur_err = torch.sqrt(2 * (H_err + self._X_L2))
             print(self._cur_err)
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
-                print(f"    Reach convergence after {i+1} pass(es).")
                 break
             elif i == self._max_iter - 1:
                 self.num_iters = self._max_iter
                 print(f"    Not converged after {self._max_iter} pass(es).")
             else:
                 self._prev_err = self._cur_err
-
-        #self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
 
     def _batch_update_H(self):
         W_t = self.W.T
@@ -343,10 +365,16 @@ class NMF:
 
     def _batch_update_W(self):
         H_t = self.H.T
-        HW = self._get_HW()
-        HW_pow = HW.pow(self._beta - 2)
-        W_factor_numer = H_t @ (self.X * HW_pow)
-        W_factor_denom = H_t @ (HW_pow * HW)
+
+        if self._beta == 2:
+            HTH = H_t @ self.H
+            W_factor_numer = H_t @ self.X
+            W_factor_denom = HTH @ self.W
+        else:
+            HW = self._get_HW()
+            HW_pow = HW.pow(self._beta - 2)
+            W_factor_numer = H_t @ (self.X * HW_pow)
+            W_factor_denom = H_t @ (HW_pow * HW)
 
         self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
         W_factor_denom[W_factor_denom == 0] = self._epsilon
@@ -358,7 +386,6 @@ class NMF:
                 self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
-                    print(f"    Reach convergence after {i+1} iteration(s).")
                     break
                 else:
                     self._prev_err = self._cur_err
@@ -382,11 +409,15 @@ class NMF:
         assert torch.sum(X<0) == 0, "The input matrix is not non-negative. NMF cannot be applied."
 
         self.X = X
+        if self._beta == 2:  # Cache sum of X^2.
+            self._X_L2 = torch.sum(X**2) / 2
         self._initialize_H_W()
 
-        if self._beta == 2:
+        if self._beta == 2 and self._method == 'online':
             self._online_update_H_W()
         else:
+            if self._method == 'online':
+                print("Cannot perform online update when beta != 2! Switch to batch update method.")
             self._batch_update_H_W()
     
     def fit_transform(self, X):
