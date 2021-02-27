@@ -90,7 +90,6 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
     H2 = model2.fit_transform(X)
     ts_end = time.time()
     W2 = model2.W
-    print(model2.reconstruction_err)
     err2 = beta_loss(torch.tensor(X), H2 @ W2, H2, W2,
                      l1_reg_H=alpha*l1_ratio, l2_reg_H=alpha*(1-l1_ratio),
                      l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio),
@@ -100,7 +99,7 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
 
 if __name__ == '__main__':
     cprint("Test 1:", 'yellow')
-    run_test("tests/data/nmf_test_1.npy", k=20, loss='frobenius', init='nndsvdar', max_iter=500, chunk_size=5000)
+    run_test("tests/data/nmf_test_1.npy", k=20, loss='frobenius', init='random', max_iter=500, chunk_size=5000)
 
     cprint("Test 2:", 'yellow')
-    run_test("tests/data/nmf_test_2.npy", k=20, loss='frobenius', init='nndsvdar', max_iter=500, chunk_size=2000)
+    run_test("tests/data/nmf_test_2.npy", k=20, loss='frobenius', init='random', max_iter=500, chunk_size=2000)
