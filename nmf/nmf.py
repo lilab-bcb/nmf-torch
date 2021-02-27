@@ -83,9 +83,17 @@ class NMF:
     def reconstruction_err(self):
         return self._cur_err
 
+    def _get_regularization_loss(self, mat, l1_reg, l2_reg):
+        res = 0.
+        if l1_reg > 0:
+            res += l1_reg * mat.norm(p=1)
+        if l2_reg > 0:
+            res += l2_reg * mat.norm(p=2)**2 / 2
+        return res
+
     def _loss(self, square_root=False):
         if self._beta == 2:
-            res = torch.sum(torch.trace(self._WWT @ self._HTH) / 2 - torch.trace(self._H_t @ self._XWT)) + self._X_SS_half
+            res = torch.trace(self._WWT @ self._HTH) / 2 - torch.trace(self._H_t @ self._XWT) + self._X_SS_half
         elif self._beta == 0 or self._beta == 1:
             Y = self._get_HW()
             X_flat = self.X.flatten()
@@ -109,14 +117,8 @@ class NMF:
             res /= (self._beta * (self._beta - 1))
 
         # Add regularization terms.
-        if self._l1_reg_H > 0:
-            res += self._l1_reg_H * self.H.norm(p=1)
-        if self._l2_reg_H > 0:
-            res += self._l2_reg_H * self.H.norm(p=2)**2 / 2
-        if self._l1_reg_W > 0:
-            res += self._l1_reg_W * self.W.norm(p=1)
-        if self._l2_reg_W > 0:
-            res += self._l2_reg_W * self.W.norm(p=2)**2 / 2
+        res += self._get_regularization_loss(self.H, self._l1_reg_H, self._l2_reg_H)
+        res += self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)
 
         if square_root:
             return torch.sqrt(2 * res)
@@ -189,7 +191,7 @@ class NMF:
         self.H = H
         self.W = W
 
-        if self._update_method == 'batch' and self._beta == 2:
+        if self._beta == 2:
             self._W_t = self.W.T
             self._WWT = self.W @ self._W_t
             self._H_t = self.H.T
@@ -210,15 +212,27 @@ class NMF:
         if l2_reg > 0:
             denom_mat += l2_reg * mat
 
-    def _W_err(self, A, B, WWT=None):
+    def _W_err(self, A, B, w_reg_factor, WWT=None):
         W_t = self.W.T
         if WWT is None:
             WWT = self.W @ W_t
 
-        return torch.sum(torch.trace(WWT @ A) / 2 - torch.trace(B @ W_t))
+        res = torch.trace(WWT @ A) / 2 - torch.trace(B @ W_t)
+        # Add regularization terms if needed
+        if self._l1_reg_W > 0:
+            res += w_reg_factor * self._l1_reg_W * self.W.norm(p=1)
+        if self._l2_reg_W > 0:
+            res += w_reg_factor * self._l2_reg_W * torch.trace(WWT) / 2
+        return res
 
     def _h_err(self, h_t, hth, WWT, xWT):
-        return torch.sum(torch.trace(WWT @ hth) / 2 - torch.trace(h_t @ xWT))
+        res = torch.trace(WWT @ hth) / 2 - torch.trace(h_t @ xWT)
+        # Add regularization terms if needed
+        if self._l1_reg_H > 0:
+            res += self._l1_reg_H * h_t.norm(p=1)
+        if self._l2_reg_H > 0:
+            res += self._l2_reg_H * torch.trace(hth) / 2
+        return res
 
     def _online_update_one_pass(self):
         indices = torch.randperm(self.X.shape[0], device=self._device_type)
@@ -278,16 +292,17 @@ class NMF:
 
             # Online update W.
             W_factor_numer = B
-            prev_W_err = self._W_err(A, B, WWT)
+            w_reg_factor = num_processed * 1.0 / self.X.shape[0]
+            prev_W_err = self._W_err(A, B, w_reg_factor, WWT)
 
             for j in torch.arange(self._w_max_iter):
                 W_factor_denom = A @ self.W
 
-                self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
+                self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, w_reg_factor*self._l1_reg_W, w_reg_factor*self._l2_reg_W)
                 W_factor_denom[W_factor_denom == 0] = self._epsilon
                 self.W *= (W_factor_numer / W_factor_denom)
 
-                cur_W_err = self._W_err(A, B)
+                cur_W_err = self._W_err(A, B, w_reg_factor)
                 if self._is_converged(prev_W_err, cur_W_err, prev_W_err) or (j + 1 == self._w_max_iter):
                     break
                 else:
@@ -345,7 +360,7 @@ class NMF:
             # Update H again at the end of each pass.
             H_err = self._online_update_H()
 
-            self._cur_err = torch.sqrt(2 * (H_err + self._X_SS_half))
+            self._cur_err = torch.sqrt(2 * (H_err + self._X_SS_half + self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)))
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
                 break
