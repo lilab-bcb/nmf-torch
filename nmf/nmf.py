@@ -5,20 +5,20 @@ class NMF:
     def __init__(
         self,
         n_components: int,
-        init: str = "nndsvd", 
-        beta_loss: Union[str, float] = "frobenius", 
-        method: str = "batch",
-        max_iter: int = 200, 
-        tol: float = 1e-4, 
-        random_state: int = 0, 
-        alpha_W: float = 0.0, 
-        l1_ratio_W: float = 0.0, 
-        alpha_H:float = 0.0, 
+        init: str = "nndsvd",
+        beta_loss: Union[str, float] = "frobenius",
+        update_method: str = "batch",
+        max_iter: int = 200,
+        tol: float = 1e-4,
+        random_state: int = 0,
+        alpha_W: float = 0.0,
+        l1_ratio_W: float = 0.0,
+        alpha_H:float = 0.0,
         l1_ratio_H:float = 0.0,
         fp_precision: str = 'float',
-        chunk_size: int = 2000,
-        w_max_iter: int = 200,
-        h_max_iter: int = 50,
+        online_chunk_size: int = 2000,
+        online_w_max_iter: int = 200,
+        online_h_max_iter: int = 50,
         use_gpu: bool = False,
     ):
         self.k = n_components
@@ -34,8 +34,8 @@ class NMF:
         else:
             raise ValueError("beta_loss must be a valid value: either from ['frobenius', 'kullback-leibler', 'itakura-saito'], or a numeric value.")
 
-        if method in ['online', 'batch']:
-            self._method = method
+        if update_method in ['online', 'batch']:
+            self._update_method = update_method
         else:
             raise ValueError("method must be a valid value from ['online', 'batch'].")
 
@@ -60,11 +60,11 @@ class NMF:
             self._tensor_dtype = torch.double
         else:
             self._tensor_dtype = fp_precision
-        
+
         self._epsilon = torch.finfo(self._tensor_dtype).eps
-        self._chunk_size = chunk_size
-        self._w_max_iter = w_max_iter
-        self._h_max_iter = h_max_iter
+        self._chunk_size = online_chunk_size
+        self._w_max_iter = online_w_max_iter
+        self._h_max_iter = online_h_max_iter
 
         self._device_type = 'cpu'
         if use_gpu:
@@ -83,11 +83,12 @@ class NMF:
     def reconstruction_err(self):
         return self._cur_err
 
-    def _loss(self, X, Y=None, WWT=None, HTH=None, H_t=None, XWT=None, square_root=False):
+    def _loss(self, square_root=False):
         if self._beta == 2:
-            res = torch.sum((X-Y)**2) / 2
+            res = torch.sum(torch.trace(self._WWT @ self._HTH) / 2 - torch.trace(self._H_t @ self._XWT)) + self._X_SS_half
         elif self._beta == 0 or self._beta == 1:
-            X_flat = X.flatten()
+            Y = self._get_HW()
+            X_flat = self.X.flatten()
             Y_flat = Y.flatten()
 
             idx = X_flat > self._epsilon
@@ -99,11 +100,12 @@ class NMF:
 
             x_div_y = X_flat / Y_flat
             if self._beta == 0:
-                res = x_div_y.sum() - x_div_y.log().sum() - X.shape.numel()
+                res = x_div_y.sum() - x_div_y.log().sum() - self.X.shape.numel()
             else:
                 res = X_flat @ x_div_y.log() - X_flat.sum() + Y.sum()
         else:
-            res = torch.sum(X.pow(self._beta) - self._beta * X * Y.pow(self._beta - 1) + (self._beta - 1) * Y.pow(self._beta))
+            Y = self._get_HW()
+            res = torch.sum(self.X.pow(self._beta) - self._beta * self.X * Y.pow(self._beta - 1) + (self._beta - 1) * Y.pow(self._beta))
             res /= (self._beta * (self._beta - 1))
 
         # Add regularization terms.
@@ -120,7 +122,7 @@ class NMF:
             return torch.sqrt(2 * res)
         else:
             return res
-    
+
     def _is_converged(self, prev_err, cur_err, init_err):
         if torch.abs((prev_err - cur_err) / init_err) < self._tol:
             return True
@@ -137,7 +139,7 @@ class NMF:
                 self._init_method = 'nndsvdar'
             else:
                 self._init_method = 'random'
-        
+
         if self._init_method in ['nndsvd', 'nndsvda', 'nndsvdar']:
             torch.manual_seed(self._random_state)
             U, S, V = torch.svd_lowrank(self.X, q=self.k)
@@ -159,7 +161,7 @@ class NMF:
                     u, v, sigma = x_p / x_p_nrm, y_p / y_p_nrm, m_p
                 else:
                     u, v, sigma = x_n / x_n_nrm, y_n / y_n_nrm, m_n
-                
+
                 factor = (S[j] * sigma).sqrt()
                 H[:, j] = factor * u
                 W[j, :] = factor * v
@@ -183,11 +185,18 @@ class NMF:
             W = torch.abs(avg * torch.randn((self.k, self.X.shape[1]), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
         else:
             raise ValueError(f"Invalid init parameter. Got {self._init_method}, but require one of (None, 'nndsvd', 'nndsvda', 'nndsvdar', 'random').")
-        
+
         self.H = H
         self.W = W
 
-        self._init_err = self._loss(self.X, self._get_HW(), square_root=True)
+        if self._update_method == 'batch' and self._beta == 2:
+            self._W_t = self.W.T
+            self._WWT = self.W @ self._W_t
+            self._H_t = self.H.T
+            self._HTH = self._H_t @ self.H
+            self._XWT = self.X @ self._W_t
+
+        self._init_err = self._loss(square_root=True)
         self._prev_err = self._init_err
 
     def _add_regularization_terms(self, mat, numer_mat, denom_mat, l1_reg, l2_reg):
@@ -205,7 +214,7 @@ class NMF:
         W_t = self.W.T
         if WWT is None:
             WWT = self.W @ W_t
-        
+
         return torch.sum(torch.trace(WWT @ A) / 2 - torch.trace(B @ W_t))
 
     def _h_err(self, h_t, hth, WWT, xWT):
@@ -253,24 +262,24 @@ class NMF:
                     prev_h_err = cur_h_err
 
             self.H[idx, :] = h
-            
+
             # Update sufficient statistics A and B.
             num_after = num_processed + cur_chunksize
 
             A *= num_processed
             A += hth
             A /= num_after
-            
+
             B *= num_processed
             B += h_t @ x
             B /= num_after
 
-            num_processed = num_after 
+            num_processed = num_after
 
             # Online update W.
             W_factor_numer = B
             prev_W_err = self._W_err(A, B, WWT)
-            
+
             for j in torch.arange(self._w_max_iter):
                 W_factor_denom = A @ self.W
 
@@ -286,19 +295,20 @@ class NMF:
 
             i += self._chunk_size
 
+
     def _online_update_H(self, W_t=None, WWT=None):
         if W_t is None:
             W_t = self.W.T
 
         if WWT is None:
             WWT = self.W @ W_t
-        
+
         i = 0
         sum_h_err = 0.
         while i < self.H.shape[0]:
             x = self.X[i:(i+self._chunk_size), :]
             h = self.H[i:(i+self._chunk_size), :]
-        
+
             xWT = x @ W_t
             h_factor_numer = xWT.clone()
             h_t = h.T
@@ -324,7 +334,7 @@ class NMF:
             i += self._chunk_size
 
         return sum_h_err
-        
+
 
     def _online_update_H_W(self):
         self._chunk_size = min(self.X.shape[0], self._chunk_size)
@@ -335,8 +345,7 @@ class NMF:
             # Update H again at the end of each pass.
             H_err = self._online_update_H()
 
-            self._cur_err = torch.sqrt(2 * (H_err + self._X_L2))
-            print(self._cur_err)
+            self._cur_err = torch.sqrt(2 * (H_err + self._X_SS_half))
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
                 break
@@ -346,31 +355,31 @@ class NMF:
             else:
                 self._prev_err = self._cur_err
 
-    def _batch_update_H(self):
-        W_t = self.W.T
 
+    def _batch_update_H(self):
         if self._beta == 2:
-            WWT = self.W @ W_t
-            H_factor_numer = self.X @ W_t
-            H_factor_denom = self.H @ WWT
+            H_factor_numer = self._XWT.clone()
+            H_factor_denom = self.H @ self._WWT
         else:
             HW = self._get_HW()
             HW_pow = HW.pow(self._beta - 2)
-            H_factor_numer = (self.X * HW_pow) @ W_t
-            H_factor_denom = (HW_pow * HW) @ W_t
+            H_factor_numer = (self.X * HW_pow) @ self._W_t
+            H_factor_denom = (HW_pow * HW) @ self._W_t
 
         self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
         H_factor_denom[H_factor_denom == 0] = self._epsilon
         self.H *= (H_factor_numer / H_factor_denom)
 
-    def _batch_update_W(self):
-        H_t = self.H.T
-
         if self._beta == 2:
-            HTH = H_t @ self.H
-            W_factor_numer = H_t @ self.X
-            W_factor_denom = HTH @ self.W
+            self._H_t = self.H.T
+            self._HTH = self._H_t @ self.H
+
+    def _batch_update_W(self):
+        if self._beta == 2:
+            W_factor_numer = self._H_t @ self.X
+            W_factor_denom = self._HTH @ self.W
         else:
+            H_t = self.H.T
             HW = self._get_HW()
             HW_pow = HW.pow(self._beta - 2)
             W_factor_numer = H_t @ (self.X * HW_pow)
@@ -378,12 +387,17 @@ class NMF:
 
         self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
         W_factor_denom[W_factor_denom == 0] = self._epsilon
-        self.W *= (W_factor_numer / W_factor_denom) 
+        self.W *= (W_factor_numer / W_factor_denom)
+
+        if self._beta == 2:
+            self._W_t = self.W.T
+            self._WWT = self.W @ self._W_t
+            self._XWT = self.X @ self._W_t
 
     def _batch_update_H_W(self):
         for i in range(self._max_iter):
             if (i + 1) % 10 == 0:
-                self._cur_err = self._loss(self.X, self._get_HW(), square_root=True)
+                self._cur_err = self._loss(square_root=True)
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     break
@@ -391,7 +405,7 @@ class NMF:
                     self._prev_err = self._cur_err
 
             self._batch_update_H()
-            self._batch_update_W()  
+            self._batch_update_W()
 
             if i == self._max_iter - 1:
                 self.num_iters = self._max_iter
@@ -401,7 +415,7 @@ class NMF:
     def fit(self, X):
         if not isinstance(X, torch.Tensor):
             X = torch.tensor(X, dtype=self._tensor_dtype, device=self._device_type)
-        else: 
+        else:
             if X.dtype != self._tensor_dtype:
                 X = X.type(self._tensor_dtype)
             if self._device_type == 'cuda' and (not X.is_cuda):
@@ -409,17 +423,17 @@ class NMF:
         assert torch.sum(X<0) == 0, "The input matrix is not non-negative. NMF cannot be applied."
 
         self.X = X
-        if self._beta == 2:  # Cache sum of X^2.
-            self._X_L2 = torch.sum(X**2) / 2
+        if self._beta == 2:  # Cache sum of X^2 divided by 2 for speed-up of calculating beta loss.
+            self._X_SS_half = torch.sum(X**2) / 2
         self._initialize_H_W()
 
-        if self._beta == 2 and self._method == 'online':
+        if self._beta == 2 and self._update_method == 'online':
             self._online_update_H_W()
         else:
-            if self._method == 'online':
-                print("Cannot perform online update when beta != 2! Switch to batch update method.")
+            if self._update_method == 'online':
+                print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
             self._batch_update_H_W()
-    
+
     def fit_transform(self, X):
         self.fit(X)
         return self.H

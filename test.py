@@ -63,33 +63,39 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
     model0 = gm.Nmf(num_topics=k, id2word=id2word, passes=1, chunksize=1000)
     model1 = sd.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state, solver='mu',
                     alpha=alpha, l1_ratio=l1_ratio)
-    model2 = nmf.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state,
-                     alpha_H=alpha, l1_ratio_H=l1_ratio, alpha_W=alpha, l1_ratio_W=l1_ratio, chunk_size=chunk_size, method='online')
+    model2 = nmf.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state, update_method='batch',
+                     alpha_H=alpha, l1_ratio_H=l1_ratio, alpha_W=alpha, l1_ratio_W=l1_ratio, online_chunk_size=chunk_size)
 
-    #cprint("Gensim:", 'green')
-    #ts_start = time.time()
-    #model0.update(csc_matrix(X.T))
-    #ts_end = time.time()
-    #print(f"Gensim uses {ts_end - ts_start} s.")
+    cprint("Gensim:", 'green')
+    ts_start = time.time()
+    model0.update(csc_matrix(X.T))
+    ts_end = time.time()
+    print(f"Gensim uses {ts_end - ts_start} s.")
 
-    #cprint("Sklearn:", 'green')
-    #print(model1)
-    #ts_start = time.time()
-    #W1 = model1.fit_transform(X)
-    #ts_end = time.time()
-    #H1 = model1.components_
-    #err1 = beta_loss(torch.tensor(X), torch.tensor(W1 @ H1), torch.tensor(W1), torch.tensor(H1),
-    #                     l1_reg_H=alpha*l1_ratio, l2_reg_H=alpha*(1-l1_ratio),
-    #                     l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio),
-    #                     beta=beta, epsilon=EPSILON, square_root=True)
-    #print(f"Sklearn uses {ts_end - ts_start} s, with reconstruction error {err1} after {model1.n_iter_} iteration(s).")
-    #print(f"H has {np.sum(W1!=0)} non-zero elements, W has {np.sum(H1!=0)} non-zero elements.")
+    cprint("Sklearn:", 'green')
+    print(model1)
+    ts_start = time.time()
+    W1 = model1.fit_transform(X)
+    ts_end = time.time()
+    H1 = model1.components_
+    err1 = beta_loss(torch.tensor(X), torch.tensor(W1 @ H1), torch.tensor(W1), torch.tensor(H1),
+                         l1_reg_H=alpha*l1_ratio, l2_reg_H=alpha*(1-l1_ratio),
+                         l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio),
+                         beta=beta, epsilon=EPSILON, square_root=True)
+    print(f"Sklearn uses {ts_end - ts_start} s, with reconstruction error {err1} after {model1.n_iter_} iteration(s).")
+    print(f"H has {np.sum(W1!=0)} non-zero elements, W has {np.sum(H1!=0)} non-zero elements.")
 
     cprint("NMF-torch:", 'green')
     ts_start = time.time()
-    Y = model2.fit_transform(X)
+    H2 = model2.fit_transform(X)
     ts_end = time.time()
-    print(f"NMF-torch uses {ts_end - ts_start} s, with final loss at {model2.reconstruction_err} after {model2.num_iters} pass(es).")
+    W2 = model2.W
+    print(model2.reconstruction_err)
+    err2 = beta_loss(torch.tensor(X), H2 @ W2, H2, W2,
+                     l1_reg_H=alpha*l1_ratio, l2_reg_H=alpha*(1-l1_ratio),
+                     l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio),
+                     beta=beta, epsilon=EPSILON, square_root=True)
+    print(f"NMF-torch uses {ts_end - ts_start} s, with final loss at {err2} after {model2.num_iters} pass(es).")
     print(f"H has {torch.sum(model2.H!=0).tolist()} non-zero elements, W has {torch.sum(model2.W!=0).tolist()} non-zero elements.")
 
 if __name__ == '__main__':
