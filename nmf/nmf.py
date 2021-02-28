@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from typing import Optional, Union
 
@@ -5,7 +6,7 @@ class NMF:
     def __init__(
         self,
         n_components: int,
-        init: str = "nndsvd",
+        init: str = "nndsvdar",
         beta_loss: Union[str, float] = "frobenius",
         update_method: str = "batch",
         max_iter: int = 200,
@@ -61,7 +62,7 @@ class NMF:
         else:
             self._tensor_dtype = fp_precision
 
-        self._epsilon = torch.finfo(self._tensor_dtype).eps
+        self._epsilon = 1e-20
         self._chunk_size = online_chunk_size
         self._w_max_iter = online_w_max_iter
         self._h_max_iter = online_h_max_iter
@@ -143,7 +144,6 @@ class NMF:
                 self._init_method = 'random'
 
         if self._init_method in ['nndsvd', 'nndsvda', 'nndsvdar']:
-            torch.manual_seed(self._random_state)
             U, S, V = torch.svd_lowrank(self.X, q=self.k)
 
             H= torch.zeros_like(U, dtype=self._tensor_dtype, device=self._device_type)
@@ -177,14 +177,12 @@ class NMF:
                 W[W == 0] = avg
             elif self._init_method == 'nndsvdar':
                 avg = self.X.mean()
-                rng = torch.Generator(device=self._device_type).manual_seed(self._random_state)
-                H[H == 0] = avg / 100 * torch.rand(H[H==0].shape, generator=rng, device=self._device_type)
-                W[W == 0] = avg / 100 * torch.rand(W[W==0].shape, generator=rng, device=self._device_type)
+                H[H == 0] = avg / 100 * torch.rand(H[H==0].shape, dtype=self._tensor_dtype, device=self._device_type)
+                W[W == 0] = avg / 100 * torch.rand(W[W==0].shape, dtype=self._tensor_dtype, device=self._device_type)
         elif self._init_method == 'random':
             avg = torch.sqrt(self.X.mean() / self.k)
-            rng = torch.Generator(device=self._device_type).manual_seed(self._random_state)
-            H = torch.abs(avg * torch.randn((self.X.shape[0], self.k), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
-            W = torch.abs(avg * torch.randn((self.k, self.X.shape[1]), generator=rng, dtype=self._tensor_dtype, device=self._device_type))
+            H = torch.abs(avg * torch.randn((self.X.shape[0], self.k), dtype=self._tensor_dtype, device=self._device_type))
+            W = torch.abs(avg * torch.randn((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type))
         else:
             raise ValueError(f"Invalid init parameter. Got {self._init_method}, but require one of (None, 'nndsvd', 'nndsvda', 'nndsvdar', 'random').")
 
@@ -212,39 +210,47 @@ class NMF:
         if l2_reg > 0:
             denom_mat += l2_reg * mat
 
-    def _W_err(self, A, B, w_reg_factor, WWT=None):
-        W_t = self.W.T
+    def _W_err(self, A, B, l1_reg_W, l2_reg_W, W_t=None, WWT=None):
+        if W_t is None:
+            W_t = self.W.T
         if WWT is None:
             WWT = self.W @ W_t
 
-        res = torch.trace(WWT @ A) / 2 - torch.trace(B @ W_t)
+        res = torch.trace(WWT @ A) / 2.0 - torch.trace(B @ W_t)
         # Add regularization terms if needed
-        if self._l1_reg_W > 0:
-            res += w_reg_factor * self._l1_reg_W * self.W.norm(p=1)
-        if self._l2_reg_W > 0:
-            res += w_reg_factor * self._l2_reg_W * torch.trace(WWT) / 2
+        if l1_reg_W > 0.0:
+            res += l1_reg_W * self.W.norm(p=1)
+        if l2_reg_W > 0.0:
+            res += l2_reg_W * torch.trace(WWT) / 2.0
         return res
 
-    def _h_err(self, h_t, hth, WWT, xWT):
-        res = torch.trace(WWT @ hth) / 2 - torch.trace(h_t @ xWT)
+    def _h_err(self, h, WWT, xWT, cache_arr = None):
+        h_t = h.T
+        hth = h_t @ h
+        if cache_arr is not None:
+            cache_arr[0] = h_t
+            cache_arr[1] = hth
+        # Forbenious-norm^2 in trace format (No X) 
+        res = torch.trace(WWT @ hth) / 2.0 - torch.trace(h_t @ xWT)
         # Add regularization terms if needed
-        if self._l1_reg_H > 0:
+        if self._l1_reg_H > 0.0:
             res += self._l1_reg_H * h_t.norm(p=1)
-        if self._l2_reg_H > 0:
-            res += self._l2_reg_H * torch.trace(hth) / 2
+        if self._l2_reg_H > 0.0:
+            res += self._l2_reg_H * torch.trace(hth) / 2.0
         return res
 
-    def _online_update_one_pass(self):
+    def _update_matrix(self, mat, numer, denom):
+        mat *= (numer / denom)
+        mat[denom < self._epsilon] = 0.0
+
+    def _online_update_one_pass(self, l1_reg_W, l2_reg_W):
         indices = torch.randperm(self.X.shape[0], device=self._device_type)
         A = torch.zeros((self.k, self.k), dtype=self._tensor_dtype, device=self._device_type)
         B = torch.zeros((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type)
 
         i = 0
         num_processed = 0
-        cnt = 0
-        import time
         while i < indices.shape[0]:
-            cnt += 1
             idx = indices[i:(i+self._chunk_size)]
             cur_chunksize = idx.shape[0]
             x = self.X[idx, :]
@@ -254,30 +260,32 @@ class NMF:
             W_t = self.W.T
             WWT = self.W @ W_t
             xWT = x @ W_t
-            h_factor_numer = xWT.clone()
-            h_t = h.T
-            hth = h_t @ h
 
-            prev_h_err = self._h_err(h_t, hth, WWT, xWT)
+            if self._l1_reg_H > 0.0:
+                h_factor_numer = xWT - self._l1_reg_H
+                h_factor_numer[h_factor_numer < 0.0] = 0.0
+            else:
+                h_factor_numer = xWT
 
-            for j in torch.arange(self._h_max_iter):
+            cache_arr = [None, None]
+            cur_h_err = self._h_err(h, WWT, xWT, cache_arr)
+
+            for j in range(self._h_max_iter):
+                prev_h_err = cur_h_err
+
                 h_factor_denom = h @ WWT
-
-                self._add_regularization_terms(h, h_factor_numer, h_factor_denom, self._l1_reg_H, self._l2_reg_H)
-                h_factor_denom[h_factor_denom == 0] = self._epsilon
-                h *= (h_factor_numer / h_factor_denom)
-                h_t = h.T
-                hth = h_t @ h
-
-                cur_h_err = self._h_err(h_t, hth, WWT, xWT)
-                if self._is_converged(prev_h_err, cur_h_err, prev_h_err) or (j + 1 == self._h_max_iter):
+                if self._l2_reg_H:
+                    h_factor_denom += self._l2_reg_H * h
+                self._update_matrix(h, h_factor_numer, h_factor_denom)
+                cur_h_err = self._h_err(h, WWT, xWT, cache_arr)
+                
+                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
                     break
-                else:
-                    prev_h_err = cur_h_err
 
             self.H[idx, :] = h
 
             # Update sufficient statistics A and B.
+            h_t, hth = cache_arr
             num_after = num_processed + cur_chunksize
 
             A *= num_processed
@@ -291,32 +299,32 @@ class NMF:
             num_processed = num_after
 
             # Online update W.
-            W_factor_numer = B
-            w_reg_factor = num_processed * 1.0 / self.X.shape[0]
-            prev_W_err = self._W_err(A, B, w_reg_factor, WWT)
+            if l1_reg_W > 0.0:
+                W_factor_numer = B - l1_reg_W
+                W_factor_numer[W_factor_numer < 0.0] = 0.0
+            else:
+                W_factor_numer = B
 
-            for j in torch.arange(self._w_max_iter):
+            cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, W_t, WWT)
+
+            for j in range(self._w_max_iter):
+                prev_W_err = cur_W_err
+
                 W_factor_denom = A @ self.W
+                if l2_reg_W > 0.0:
+                    W_factor_denom += l2_reg_W * self.W
+                self._update_matrix(self.W, W_factor_numer, W_factor_denom)
+                cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W)
 
-                self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, w_reg_factor*self._l1_reg_W, w_reg_factor*self._l2_reg_W)
-                W_factor_denom[W_factor_denom == 0] = self._epsilon
-                self.W *= (W_factor_numer / W_factor_denom)
-
-                cur_W_err = self._W_err(A, B, w_reg_factor)
-                if self._is_converged(prev_W_err, cur_W_err, prev_W_err) or (j + 1 == self._w_max_iter):
+                if self._is_converged(prev_W_err, cur_W_err, prev_W_err):
                     break
-                else:
-                    prev_W_err = cur_W_err
 
             i += self._chunk_size
 
 
-    def _online_update_H(self, W_t=None, WWT=None):
-        if W_t is None:
-            W_t = self.W.T
-
-        if WWT is None:
-            WWT = self.W @ W_t
+    def _online_update_H(self):
+        W_t = self.W.T
+        WWT = self.W @ W_t
 
         i = 0
         sum_h_err = 0.
@@ -325,25 +333,25 @@ class NMF:
             h = self.H[i:(i+self._chunk_size), :]
 
             xWT = x @ W_t
-            h_factor_numer = xWT.clone()
-            h_t = h.T
-            hth = h_t @ h
-            prev_h_err = self._h_err(h_t, hth, WWT, xWT)
+            if self._l1_reg_H > 0.0:
+                h_factor_numer = xWT - self._l1_reg_H
+                h_factor_numer[h_factor_numer < 0.0] = 0.0
+            else:
+                h_factor_numer = xWT
 
-            for j in torch.arange(self._h_max_iter):
+            cur_h_err = self._h_err(h, WWT, xWT)
+
+            for j in range(self._h_max_iter):
+                prev_h_err = cur_h_err
+
                 h_factor_denom = h @ WWT
-                self._add_regularization_terms(h, h_factor_numer, h_factor_denom, self._l1_reg_H, self._l2_reg_H)
-                h_factor_denom[h_factor_denom == 0] = self._epsilon
-                h *= (h_factor_numer / h_factor_denom)
-                h_t = h.T
-                hth = h_t @ h
-                cur_h_err = self._h_err(h_t, hth, WWT, xWT)
+                if self._l2_reg_H:
+                    h_factor_denom += self._l2_reg_H * h
+                self._update_matrix(h, h_factor_numer, h_factor_denom)
+                cur_h_err = self._h_err(h, WWT, xWT)
+                
                 if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
                     break
-                elif j + 1 == self._h_max_iter:
-                    break
-                else:
-                    prev_h_err = cur_h_err
 
             sum_h_err += cur_h_err
             i += self._chunk_size
@@ -354,8 +362,11 @@ class NMF:
     def _online_update_H_W(self):
         self._chunk_size = min(self.X.shape[0], self._chunk_size)
 
+        l1_reg_W = self._l1_reg_W / self.X.shape[0]
+        l2_reg_W = self._l2_reg_W / self.X.shape[0]
+
         for i in range(self._max_iter):
-            self._online_update_one_pass()
+            self._online_update_one_pass(l1_reg_W, l2_reg_W)
 
             # Update H again at the end of each pass.
             H_err = self._online_update_H()
@@ -382,8 +393,7 @@ class NMF:
             H_factor_denom = (HW_pow * HW) @ self._W_t
 
         self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
-        H_factor_denom[H_factor_denom == 0] = self._epsilon
-        self.H *= (H_factor_numer / H_factor_denom)
+        self._update_matrix(self.H, H_factor_numer, H_factor_denom)
 
         if self._beta == 2:
             self._H_t = self.H.T
@@ -401,8 +411,7 @@ class NMF:
             W_factor_denom = H_t @ (HW_pow * HW)
 
         self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
-        W_factor_denom[W_factor_denom == 0] = self._epsilon
-        self.W *= (W_factor_numer / W_factor_denom)
+        self._update_matrix(self.W, W_factor_numer, W_factor_denom)
 
         if self._beta == 2:
             self._W_t = self.W.T
@@ -428,6 +437,8 @@ class NMF:
 
     @torch.no_grad()
     def fit(self, X):
+        torch.manual_seed(self._random_state)
+
         if not isinstance(X, torch.Tensor):
             X = torch.tensor(X, dtype=self._tensor_dtype, device=self._device_type)
         else:
