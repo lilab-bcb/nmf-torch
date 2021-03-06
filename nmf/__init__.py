@@ -1,1 +1,1 @@
-from .nmf import NMF
+from .nmf import run_nmf

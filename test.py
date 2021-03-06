@@ -1,14 +1,12 @@
 import numpy as np
 import sklearn.decomposition as sd
-import gensim.models.nmf as gm
-import nmf
 import time
 import torch
 
-from scipy.sparse import csc_matrix
 from termcolor import cprint
+from nmf import run_nmf
 
-EPSILON = torch.finfo(torch.float32).eps
+EPSILON = 1e-20
 
 def beta_loss(X, Y, H, W, beta, epsilon, l1_reg_H=0., l2_reg_H=0., l1_reg_W=0., l2_reg_W=0., square_root=False):
         if beta == 2:
@@ -56,46 +54,47 @@ def run_test(filename, k, init='nndsvdar', loss='kullback-leibler', tol=1e-4, ma
     else:
         raise ValueError("Beta loss not supported!")
 
-    p = zip(range(X.shape[1]), map(lambda n: 'gene'+str(n), range(X.shape[1])))
-    id2word = {}
-    for key, val in p:
-        id2word[key] = val
-    model0 = gm.Nmf(num_topics=k, id2word=id2word, passes=1, chunksize=1000)
-    model1 = sd.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state, solver='mu',
-                    alpha=alpha, l1_ratio=l1_ratio)
-    model2 = nmf.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state, update_method='batch',
-                     alpha_H=alpha, l1_ratio_H=l1_ratio, alpha_W=alpha, l1_ratio_W=l1_ratio, online_chunk_size=chunk_size)
 
-    cprint("Gensim:", 'green')
-    ts_start = time.time()
-    model0.update(csc_matrix(X.T))
-    ts_end = time.time()
-    print(f"Gensim uses {ts_end - ts_start} s.")
 
     cprint("Sklearn:", 'green')
-    print(model1)
+    model0 = sd.NMF(n_components=k, init=init, beta_loss=loss, tol=tol, max_iter=max_iter, random_state=random_state, solver='mu',
+                    alpha=alpha, l1_ratio=l1_ratio)
+    print(model0)
     ts_start = time.time()
-    W1 = model1.fit_transform(X)
+    W0 = model0.fit_transform(X)
     ts_end = time.time()
-    H1 = model1.components_
-    err1 = beta_loss(torch.tensor(X), torch.tensor(W1 @ H1), torch.tensor(W1), torch.tensor(H1),
+    H0 = model0.components_
+    err0 = beta_loss(torch.tensor(X), torch.tensor(W0 @ H0), torch.tensor(W0), torch.tensor(H0),
                          l1_reg_H=alpha*l1_ratio, l2_reg_H=alpha*(1-l1_ratio),
                          l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio),
                          beta=beta, epsilon=EPSILON, square_root=True)
-    print(f"Sklearn uses {ts_end - ts_start} s, with reconstruction error {err1} after {model1.n_iter_} iteration(s).")
-    print(f"H has {np.sum(W1!=0)} non-zero elements, W has {np.sum(H1!=0)} non-zero elements.")
+    print(f"Sklearn uses {ts_end - ts_start} s, with reconstruction error {err0} after {model0.n_iter_} iteration(s).")
+    print(f"H has {np.sum(W0!=0)} non-zero elements, W has {np.sum(H0!=0)} non-zero elements.")
 
-    cprint("NMF-torch:", 'green')
+    cprint("NMF-torch batch:", 'green')
     ts_start = time.time()
-    H2 = model2.fit_transform(X)
+    H1, W1, _ = run_nmf(X, n_components=k, init=init, beta_loss=loss, update_method='batch', max_iter=max_iter, tol=tol,
+                        random_state=random_state, alpha_W=alpha, l1_ratio_W=l1_ratio, alpha_H=alpha, l1_ratio_H=l1_ratio)
     ts_end = time.time()
-    W2 = model2.W
-    err2 = beta_loss(torch.tensor(X), H2 @ W2, H2, W2,
+    err1 = beta_loss(torch.tensor(X), torch.tensor(H1 @ W1), torch.tensor(H1), torch.tensor(W1),
                      l1_reg_H=alpha*l1_ratio, l2_reg_H=alpha*(1-l1_ratio),
                      l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio),
                      beta=beta, epsilon=EPSILON, square_root=True)
-    print(f"NMF-torch uses {ts_end - ts_start} s, with final loss at {err2} after {model2.num_iters} pass(es).")
-    print(f"H has {torch.sum(model2.H!=0).tolist()} non-zero elements, W has {torch.sum(model2.W!=0).tolist()} non-zero elements.")
+    print(f"NMF-torch uses {ts_end - ts_start} s, with final loss at {err1}.")
+    print(f"H has {np.sum(H1!=0)} non-zero elements, W has {np.sum(W1!=0)} non-zero elements.")
+
+    cprint("NMF-torch online:", 'green')
+    ts_start = time.time()
+    H2, W2, _ = run_nmf(X, n_components=k, init=init, beta_loss=loss, update_method='online', tol=tol, random_state=random_state,
+                        alpha_W=alpha, l1_ratio_W=l1_ratio, alpha_H=alpha, l1_ratio_H=l1_ratio,
+                        online_max_pass=max_iter, online_chunk_size=chunk_size)
+    ts_end = time.time()
+    err2 = beta_loss(torch.tensor(X), torch.tensor(H2 @ W2), torch.tensor(H2), torch.tensor(W2),
+                     l1_reg_H=alpha*l1_ratio, l2_reg_H=alpha*(1-l1_ratio),
+                     l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio),
+                     beta=beta, epsilon=EPSILON, square_root=True)
+    print(f"NMF-torch uses {ts_end - ts_start} s, with final loss at {err2}.")
+    print(f"H has {np.sum(H2!=0)} non-zero elements, W has {np.sum(W2!=0)} non-zero elements.")
 
 if __name__ == '__main__':
     cprint("Test 1:", 'yellow')
