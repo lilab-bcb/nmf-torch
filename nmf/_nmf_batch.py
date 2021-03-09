@@ -1,5 +1,6 @@
 import torch
 
+from typing import Union
 from ._nmf_base import NMFBase
 
 
@@ -15,7 +16,7 @@ class NMFBatch(NMFBase):
         l1_ratio_W: float,
         alpha_H: float,
         l1_ratio_H: float,
-        fp_precision: str,
+        fp_precision: Union[str, torch.dtype],
         device_type: str,
         max_iter: int,
     ):
@@ -87,7 +88,7 @@ class NMFBatch(NMFBase):
                     print(f"    Converged after {self.num_iters} iteration(s).")
                     break
                 else:
-                    self._prev_err = self._cur_err
+                    self._prev_err = self._cur_err.clone()
 
             self._update_H()
             self._update_W()

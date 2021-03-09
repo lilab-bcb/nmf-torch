@@ -1,5 +1,6 @@
 import torch
 
+from typing import Union
 
 class NMFBase:
     def __init__(
@@ -13,7 +14,7 @@ class NMFBase:
         l1_ratio_W: float,
         alpha_H: float,
         l1_ratio_H: float,
-        fp_precision: str,
+        fp_precision: Union[str, torch.dtype],
         device_type: str,
     ):
         self.k = n_components
@@ -197,7 +198,7 @@ class NMFBase:
             self._XWT = self.X @ self._W_t
 
         self._init_err = self._loss()
-        self._prev_err = self._init_err
+        self._prev_err = self._init_err.clone()
 
 
     def fit(self, X):

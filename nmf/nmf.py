@@ -17,7 +17,7 @@ def run_nmf(
     l1_ratio_W: float = 0.0,
     alpha_H: float = 0.0,
     l1_ratio_H: float = 0.0,
-    fp_precision: str = "float",
+    fp_precision: Union[str, torch.dtype] = "float",
     online_max_pass: int = 10,
     online_chunk_size: int = 2000,
     online_w_max_iter: int = 200,
