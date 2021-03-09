@@ -6,7 +6,7 @@ class INMFBatch:
     def __init__(
         self,
         n_components: int,
-        lam: float = 0.0,
+        lam: float = 5.,
         init: str = 'random',
         tol: float = 1e-4,
         random_state: int = 0,
@@ -39,7 +39,7 @@ class INMFBatch:
         W_t = self.W.T
         self.H = []
         self.V = []
-        self._init_err = self._SSX.clone()
+        init_err = self._SSX.clone()
         self._H_t = []
         self._HTH = []
         self._WVWVT = []
@@ -60,24 +60,23 @@ class INMFBatch:
             self._XWVT.append(self.X[k] @ WV_t)
 
             # Calculate loss of this batch
-            self._init_err += self._loss(batch_id=k)
-
-        self._prev_err = self._init_err.clone()
-        self._cur_err = self._init_err.clone()
+            init_err += self._loss(batch_id=k)
+        self._init_err = torch.sqrt(init_err)
+        self._prev_err = self._init_err
+        self._cur_err = self._init_err
 
 
     def _loss(self, batch_id=None):
         if batch_id is None:
-            res = self._SSX
+            res = self._SSX.clone()
             for k in range(self._n_batches):
                 res += torch.trace(self._HTH[k] @ self._WVWVT[k]) - 2 * torch.trace(self._H_t[k] @ self._XWVT[k])
                 if self._lambda > 0:
                     res += torch.sum((self.H[k]@self.V[k])**2)
+            return torch.sqrt(res)
         else:
             assert batch_id >= 0 and batch_id < self._n_batches, "Batch ID is out of bound!"
-            res = torch.trace(self._HTH[batch_id] @ self._WVWVT[batch_id]) - 2 * torch.trace(self._H_t[batch_id] @ self._XWVT[batch_id])
-
-        return res
+            return torch.trace(self._HTH[batch_id] @ self._WVWVT[batch_id]) - 2 * torch.trace(self._H_t[batch_id] @ self._XWVT[batch_id])
 
 
     @property
@@ -156,13 +155,12 @@ class INMFBatch:
         for i in range(self._max_iter):
             if (i + 1) % 10 == 0:
                 self._cur_err = self._loss()
-                print(f"prev={self._prev_err}, cur={self._cur_err}, init={self._init_err}")
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     print(f"    Converged after {self.num_iters} iteration(s).")
                     break
                 else:
-                    self._prev_err = self._cur_err.clone()
+                    self._prev_err = self._cur_err
 
             self._update_W()
             self._update_H_V()
