@@ -102,7 +102,7 @@ class NMFOnline(NMFBase):
             cur_h_err = self._h_err(h, WWT, xWT, cache_arr)
 
             for j in range(self._h_max_iter):
-                prev_h_err = cur_h_err.clone()
+                prev_h_err = cur_h_err
 
                 h_factor_denom = h @ WWT
                 if self._l2_reg_H:
@@ -139,7 +139,7 @@ class NMFOnline(NMFBase):
             cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, W_t, WWT)
 
             for j in range(self._w_max_iter):
-                prev_W_err = cur_W_err.clone()
+                prev_W_err = cur_W_err
 
                 W_factor_denom = A @ self.W
                 if l2_reg_W > 0.0:
@@ -173,7 +173,7 @@ class NMFOnline(NMFBase):
             cur_h_err = self._h_err(h, WWT, xWT)
 
             for j in range(self._h_max_iter):
-                prev_h_err = cur_h_err.clone()
+                prev_h_err = cur_h_err
 
                 h_factor_denom = h @ WWT
                 if self._l2_reg_H:
@@ -184,7 +184,7 @@ class NMFOnline(NMFBase):
                 if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
                     break
 
-            sum_h_err += cur_h_err.clone()
+            sum_h_err += cur_h_err
             i += self._chunk_size
 
         return sum_h_err
@@ -216,7 +216,7 @@ class NMFOnline(NMFBase):
                 self.num_iters = self._max_pass
                 print(f"    Not converged after {self._max_pass} pass(es).")
             else:
-                self._prev_err = self._cur_err.clone()
+                self._prev_err = self._cur_err
 
 
     def fit_transform(self, X):

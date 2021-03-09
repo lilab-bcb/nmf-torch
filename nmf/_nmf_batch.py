@@ -88,7 +88,7 @@ class NMFBatch(NMFBase):
                     print(f"    Converged after {self.num_iters} iteration(s).")
                     break
                 else:
-                    self._prev_err = self._cur_err.clone()
+                    self._prev_err = self._cur_err
 
             self._update_H()
             self._update_W()
