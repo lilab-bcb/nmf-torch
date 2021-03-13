@@ -35,6 +35,8 @@ class INMFBatch:
     def _initialize_W_H_V(self):
         # Random initialization
         W = torch.zeros((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
+        self.H = []
+        self.V = []
         for k in range(self._n_batches):
             avg = torch.sqrt(self.X[k].mean() / self._n_components)
             H = torch.abs(avg * torch.randn((self.X[k].shape[0], self._n_components), dtype=self._tensor_dtype, device=self._device_type))
@@ -43,6 +45,7 @@ class INMFBatch:
             self.V.append(V)
             W += torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
         W /= self._n_batches
+        self.W = W
 
         self._HTH = []
         self._WVWVT = []
@@ -65,7 +68,7 @@ class INMFBatch:
     def _loss(self):
         res = 0.0
         for k in range(self._n_batches):
-            res += torch.trace(self._HTH[k] @ self._WVWVT[k]) - 2 * torch.trace(self._H_t[k] @ self._XWVT[k])
+            res += torch.trace(self._HTH[k] @ self._WVWVT[k]) - 2 * torch.trace(self.H[k].T @ self._XWVT[k])
             if self._lambda > 0:
                 res += torch.trace(self._VVT[k] @ self._HTH[k])
         res += self._SSX
@@ -144,20 +147,19 @@ class INMFBatch:
 
         # Batch update
         for i in range(self._max_iter):
+            self._update_H_V_W()
+
             if (i + 1) % 10 == 0:
                 self._cur_err = self._loss()
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     print(f"    Converged after {self.num_iters} iteration(s).")
-                    break
-                else:
-                    self._prev_err = self._cur_err
+                    return
 
-            self._update_H_V_W()
+                self._prev_err = self._cur_err
 
-            if i == self._max_iter - 1:
-                self.num_iters = self._max_iter
-                print(f"    Not converged after {self.num_iters} iteration(s).")
+        self.num_iters = self._max_iter
+        print(f"    Not converged after {self.num_iters} iteration(s).")
 
 
     def fit_transform(

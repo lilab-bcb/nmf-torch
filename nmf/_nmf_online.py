@@ -211,12 +211,12 @@ class NMFOnline(NMFBase):
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
                 print(f"    Converged after {self.num_iters} pass(es).")
-                break
-            elif i == self._max_pass - 1:
-                self.num_iters = self._max_pass
-                print(f"    Not converged after {self._max_pass} pass(es).")
-            else:
-                self._prev_err = self._cur_err
+                return
+
+            self._prev_err = self._cur_err
+
+        self.num_iters = self._max_pass
+        print(f"    Not converged after {self._max_pass} pass(es).")
 
 
     def fit_transform(self, X):

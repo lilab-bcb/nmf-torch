@@ -81,21 +81,20 @@ class NMFBatch(NMFBase):
 
         # Batch update.
         for i in range(self._max_iter):
+            self._update_H()
+            self._update_W()
+
             if (i + 1) % 10 == 0:
                 self._cur_err = self._loss()
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     print(f"    Converged after {self.num_iters} iteration(s).")
-                    break
-                else:
-                    self._prev_err = self._cur_err
+                    return
 
-            self._update_H()
-            self._update_W()
+                self._prev_err = self._cur_err
 
-            if i == self._max_iter - 1:
-                self.num_iters = self._max_iter
-                print(f"    Not converged after {self.num_iters} iteration(s).")
+        self.num_iters = self._max_iter
+        print(f"    Not converged after {self.num_iters} iteration(s).")
 
 
     def fit_transform(self, X):
