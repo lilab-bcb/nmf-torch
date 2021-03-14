@@ -211,7 +211,9 @@ class NMFBase:
                 X = X.type(self._tensor_dtype)
             if self._device_type == 'cuda' and (not X.is_cuda):
                 X = X.to(device=self._device_type)
-        assert torch.sum(X<0) == 0, "The input matrix is not non-negative. NMF cannot be applied."
+
+        if torch.any(X < 0):
+            raise ValueError("The input matrix is not non-negative. NMF cannot be applied.")
 
         self.X = X
         if self._beta == 2:  # Cache sum of X^2 divided by 2 for speed-up of calculating beta loss.
