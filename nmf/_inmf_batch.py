@@ -141,7 +141,7 @@ class INMFBatch:
         # Cache Sum of squares of Xs.
         self._SSX = 0.0
         for k in range(self._n_batches):
-            self._SSX += torch.sum(self.X[k]**2)
+            self._SSX += self.X[k].norm(p=2)**2
 
         self._initialize_W_H_V()
 

@@ -217,5 +217,5 @@ class NMFBase:
 
         self.X = X
         if self._beta == 2:  # Cache sum of X^2 divided by 2 for speed-up of calculating beta loss.
-            self._X_SS_half = torch.sum(X**2) / 2
+            self._X_SS_half = X.norm(p=2)**2 / 2
         self._initialize_H_W()
