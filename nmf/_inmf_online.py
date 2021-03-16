@@ -18,7 +18,7 @@ class INMFOnline(INMFBase):
         w_max_iter: int = 200,
         h_max_iter: int = 50,
     ):
-        super.__init__(
+        super().__init__(
             n_components=n_components,
             lam=lam,
             init=init,
@@ -46,16 +46,16 @@ class INMFOnline(INMFBase):
         return res
 
 
-    def _WV_err(self, A, B, k, WV=None, WVWVT=None, VVT=None):
+    def _WV_err(self, A, B, V, WV=None, WVWVT=None, VVT=None):
         if WV is None:
-            WV = self.W + self.V[k]
+            WV = self.W + V
             WVWVT = WV @ WV.T
-            VVT = self.V[k] @ self.V[k].T
+            VVT = V @ V.T
 
         res = torch.trace(WVWVT @ A) - 2.0 * torch.trace(B @ WV.T)
         # Add regularization terms if needed
         if self._lambda > 0:
-            res += self._labmda * torch.trace(A @ VVT)
+            res += self._lambda * torch.trace(A @ VVT)
         return res
 
 
@@ -87,7 +87,7 @@ class INMFOnline(INMFBase):
                 WV = self.W + self.V[k]
                 WVWVT = WV @ WV.T
                 xWVT = x @ WV.T
-                VVT = self.V @ self.V.T
+                VVT = self.V[k] @ self.V[k].T
 
                 h_factor_numer = xWVT
 
@@ -126,7 +126,7 @@ class INMFOnline(INMFBase):
                 V_factor_numer = B[k]
                 W_factor_numer = C + B[k]
 
-                cur_WV_err = self._WV_err(A[k], B[k], k, WV, WVWVT, VVT)
+                cur_WV_err = self._WV_err(A[k], B[k], self.V[k], WV, WVWVT, VVT)
 
                 for j in range(self._w_max_iter):
                     prev_WV_err = cur_WV_err
@@ -134,10 +134,10 @@ class INMFOnline(INMFBase):
                     V_factor_denom = A[k] @ (self.W + (1 + self._lambda) * self.V[k])
                     self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
 
-                    W_factor_denom = D + self.W @ E + A[k] @ (self.W + self.V[k])
+                    W_factor_denom = D + E @ self.W + A[k] @ (self.W + self.V[k])
                     self._update_matrix(self.W, W_factor_numer, W_factor_denom)
 
-                    cur_WV_err = self._WV_err(A[k], B[k], k)
+                    cur_WV_err = self._WV_err(A[k], B[k], self.V[k])
 
                     if self._is_converged(prev_WV_err, cur_WV_err, prev_WV_err):
                         break
@@ -153,14 +153,14 @@ class INMFOnline(INMFBase):
 
     def _update_H(self):
         for k in range(self._n_batches):
-            WV = self.W @ self.V[k]
+            WV = self.W + self.V[k]
             WVWVT = WV @ WV.T
 
             i = 0
             sum_h_err = 0.
-            while i < self.H.shape[0]:
-                x = self.X[i:(i+self._chunk_size), :]
-                h = self.H[i:(i+self._chunk_size), :]
+            while i < self.H[k].shape[0]:
+                x = self.X[k][i:(i+self._chunk_size), :]
+                h = self.H[k][i:(i+self._chunk_size), :]
 
                 xWVT = x @ WV.T
                 h_factor_numer = xWVT
@@ -185,6 +185,8 @@ class INMFOnline(INMFBase):
 
                 sum_h_err += cur_h_err
                 i += self._chunk_size
+
+        return sum_h_err
 
 
     def fit(
