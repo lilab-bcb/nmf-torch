@@ -35,59 +35,16 @@ class INMFBase:
         self.H = []
         self.V = []
 
-        if self._init_method == 'nndsvdar':
-            for k in range(self._n_batches):
-                U, S, D = torch.svd_lowrank(self.X[k], q=self._n_components)
-
-                H= torch.zeros_like(U, dtype=self._tensor_dtype, device=self._device_type)
-                V = torch.zeros_like(D.T, dtype=self._tensor_dtype, device=self._device_type)
-                H[:, 0] = S[0].sqrt() * U[:, 0]
-                V[0, :] = S[0].sqrt() * D[:, 0]
-
-                for j in range(2, self._n_components):
-                    x, y = U[:, j], D[:, j]
-                    x_p, y_p = x.maximum(torch.zeros_like(x, device=self._device_type)), y.maximum(torch.zeros_like(y, device=self._device_type))
-                    x_n, y_n = x.minimum(torch.zeros_like(x, device=self._device_type)).abs(), y.minimum(torch.zeros_like(y, device=self._device_type)).abs()
-                    x_p_nrm, y_p_nrm = x_p.norm(p=2), y_p.norm(p=2)
-                    x_n_nrm, y_n_nrm = x_n.norm(p=2), y_n.norm(p=2)
-                    m_p, m_n = x_p_nrm * y_p_nrm, x_n_nrm * y_n_nrm
-
-                    if m_p > m_n:
-                        u, v, sigma = x_p / x_p_nrm, y_p / y_p_nrm, m_p
-                    else:
-                        u, v, sigma = x_n / x_n_nrm, y_n / y_n_nrm, m_n
-
-                    factor = (S[j] * sigma).sqrt()
-                    H[:, j] = factor * u
-                    V[j, :] = factor * v
-
-                H[H < eps] = 0
-                V[V < eps] = 0
-
-                if self._init_method == 'nndsvdar':
-                    avg = self.X[k].mean()
-                    H[H == 0] = avg / 100 * torch.rand(H[H==0].shape, dtype=self._tensor_dtype, device=self._device_type)
-                    V[V == 0] = avg / 100 * torch.rand(V[V==0].shape, dtype=self._tensor_dtype, device=self._device_type)
-
-                W += V / 2
-                self.H.append(H)
-                self.V.append(V)
-
-            self.W = W / self._n_batches
-
-        elif self._init_method == 'random':
-            # Random initialization
-            for k in range(self._n_batches):
-                avg = torch.sqrt(self.X[k].mean() / self._n_components)
-                H = torch.abs(avg * torch.randn((self.X[k].shape[0], self._n_components), dtype=self._tensor_dtype, device=self._device_type))
-                V = torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
-                self.H.append(H)
-                self.V.append(V)
-                W += torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
-            W /= self._n_batches
-            self.W = W
-        else:
-            raise ValueError(f"Invalid init parameter. Got {self._init_method}, but require one of ('nndsvdar', 'random').")
+        # Random initialization
+        for k in range(self._n_batches):
+            avg = torch.sqrt(self.X[k].mean() / self._n_components)
+            H = torch.abs(avg * torch.randn((self.X[k].shape[0], self._n_components), dtype=self._tensor_dtype, device=self._device_type))
+            V = torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
+            self.H.append(H)
+            self.V.append(V)
+            W += torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
+        W /= self._n_batches
+        self.W = W
 
         self._HTH = []
         self._WVWVT = []
