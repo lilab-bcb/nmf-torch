@@ -35,19 +35,18 @@ class INMFBatch(INMFBase):
         for k in range(self._n_batches):
             # Update H[k]
             H_numer = self._XWVT[k]
-            H_denom = self.H[k] @ self._WVWVT[k]
-            if self._lambda > 0:
-                H_denom += self._lambda * (self.H[k] @ self._VVT[k])
+            H_denom = self.H[k] @ (self._WVWVT[k] + self._lambda * self._VVT[k]) if self._lambda > 0.0 else self.H[k] @ self._WVWVT[k]
             self._update_matrix(self.H[k], H_numer, H_denom)
             # Cache HTH
             self._HTH[k] = self.H[k].T @ self.H[k]
 
             # Update V[k]
             V_numer = self.H[k].T @ self.X[k]
-            V_denom = self._HTH[k] @ (self.W + self.V[k])
-            if self._lambda > 0:
-                V_denom += self._lambda * (self._HTH[k] @ self.V[k])
+            V_denom = self._HTH[k] @ (self.W + (1.0 + self._lambda) * self.V[k])
             self._update_matrix(self.V[k], V_numer, V_denom)
+            # Cache VVT
+            if self._lambda > 0.0:
+                self._VVT[k] = self.V[k] @ self.V[k].T
 
             # Update W numer and denomer
             W_numer += V_numer
