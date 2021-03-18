@@ -37,12 +37,14 @@ class INMFOnline(INMFBase):
 
 
     def _h_err(self, h, hth, WVWVT, xWVT, VVT):
-        res = torch.trace((WVWVT + self._lambda * VVT) @ hth) if self._lambda > 0.0 else torch.trace(WVWVT @ hth) # Forbenious-norm^2 in trace format (No X)
+        # Calculate L2 Loss (no sum of squares of X) for block h in trace format.
+        res = torch.trace((WVWVT + self._lambda * VVT) @ hth) if self._lambda > 0.0 else torch.trace(WVWVT @ hth)
         res -= 2.0 * torch.trace(h.T @ xWVT)
         return res
 
 
     def _v_err(self, A, B, WV, WVWVT, VVT):
+        # Calculate L2 Loss (no sum of squares of X) for one batch in trace format.
         res = torch.trace((WVWVT + self._lambda * VVT) @ A) if self._lambda > 0.0 else torch.trace(WVWVT @ A)
         res -= 2.0 * torch.trace(B @ WV.T)
         return res
@@ -63,7 +65,7 @@ class INMFOnline(INMFBase):
         C = torch.zeros((self._n_components, self._n_components), dtype=self._tensor_dtype, device=self._device_type)
         D = torch.zeros((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
         E = torch.zeros((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
-        
+
         batch_indices = torch.randperm(self._n_batches, device=self._device_type)
         for k in batch_indices:
             indices = torch.randperm(self.X[k].shape[0], device=self._device_type)
@@ -112,8 +114,8 @@ class INMFOnline(INMFBase):
                 for j in range(self._v_max_iter):
                     prev_v_err = cur_v_err
 
-                    v_factor_denom = A @ (WV + self._lambda * self.V[k])
-                    self._update_matrix(self.V[k], v_factor_numer, v_factor_denom)
+                    V_factor_denom = A @ (WV + self._lambda * self.V[k])
+                    self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
                     WV = self.W + self.V[k]
                     WVWVT = WV @ WV.T
                     VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
@@ -127,7 +129,7 @@ class INMFOnline(INMFBase):
                 D += htx
                 CW = C @ self.W
                 E_new = E + A @ self.V[k]
-                
+
                 # Update W
                 W_factor_numer = D
                 cur_w_err = self._w_err(CW, E_new, D)
@@ -137,7 +139,7 @@ class INMFOnline(INMFBase):
                     W_factor_denom = CW + E_new
                     self._update_matrix(self.W, W_factor_numer, W_factor_denom)
                     CW = C @ self.W
-                    cur_WV_err = self._w_err(CW, E_new, D)
+                    cur_w_err = self._w_err(CW, E_new, D)
 
                     if self._is_converged(prev_w_err, cur_w_err, prev_w_err):
                         break
@@ -153,7 +155,7 @@ class INMFOnline(INMFBase):
         """
         A = torch.zeros((self._n_components, self._n_components), dtype=self._tensor_dtype, device=self._device_type)
         B = torch.zeros((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
-        
+
         for k in range(self._n_batches):
             indices = torch.randperm(self.X[k].shape[0], device=self._device_type)
 
@@ -201,8 +203,8 @@ class INMFOnline(INMFBase):
                 for j in range(self._v_max_iter):
                     prev_v_err = cur_v_err
 
-                    v_factor_denom = A @ (WV + self._lambda * self.V[k])
-                    self._update_matrix(self.V[k], v_factor_numer, v_factor_denom)
+                    V_factor_denom = A @ (WV + self._lambda * self.V[k])
+                    self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
                     WV = self.W + self.V[k]
                     WVWVT = WV @ WV.T
                     VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
@@ -256,15 +258,6 @@ class INMFOnline(INMFBase):
         mats: List[torch.tensor],
     ):
         super().fit(mats)
-
-        # Adjust chunk size if needed.
-        x_min = self.X[0].shape[0]
-        for k in range(1, self._n_batches):
-            if x_min < self.X[k].shape[0]:
-                x_min = self.X[k].shape[0]
-        if self._chunk_size > x_min:
-            print(f"Warning: The chunk size you set {self._chunk_size} is larger than number of cells in the smallest sample {x_min}. Set chunk size to {x_min} instead!")
-            self._chunk_size = x_min
 
         for i in range(self._max_pass):
             self._update_one_pass()
