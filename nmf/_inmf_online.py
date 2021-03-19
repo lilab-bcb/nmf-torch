@@ -267,7 +267,7 @@ class INMFOnline(INMFBase):
 
         for i in range(self._max_pass):
             self._update_one_pass()
-            #self._update_H_V()
+            self._update_H_V()
             H_err = self._update_H()
 
             self._cur_err = torch.sqrt(H_err + self._SSX)
