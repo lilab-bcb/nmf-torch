@@ -218,13 +218,13 @@ class INMFOnline(INMFBase):
 
     def _update_H(self):
         """ Fix W and V, update H """
+        sum_h_err = 0.0
         for k in range(self._n_batches):
             WV = self.W + self.V[k]
             WVWVT = WV @ WV.T
             VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
 
             i = 0
-            sum_h_err = 0.0
             while i < self.H[k].shape[0]:
                 x = self.X[k][i:(i+self._chunk_size), :]
                 h = self.H[k][i:(i+self._chunk_size), :]
@@ -269,6 +269,8 @@ class INMFOnline(INMFBase):
                 self.num_iters = i + 1
                 print(f"    Converged after {self.num_iters} pass(es).")
                 return
+
+            self._prev_err = self._cur_err
 
         self.num_iters = self._max_pass
         print(f"    Not converged after {self._max_pass} pass(es).")
