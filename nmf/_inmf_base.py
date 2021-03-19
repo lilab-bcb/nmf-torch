@@ -76,8 +76,8 @@ class INMFBase:
     def reconstruction_err(self):
         return self._cur_err
 
-    def _is_converged(self, prev_err, cur_err, init_err):
-        return torch.abs((prev_err - cur_err) / init_err) < self._tol
+    def _is_converged(self, prev_err, cur_err, init_err, tolerance):
+        return torch.abs((prev_err - cur_err) / init_err) < tolerance
 
     def _update_matrix(self, mat, numer, denom):
         mat *= (numer / denom)

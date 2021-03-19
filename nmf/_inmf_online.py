@@ -18,6 +18,9 @@ class INMFOnline(INMFBase):
         w_max_iter: int = 200,
         v_max_iter: int = 50,
         h_max_iter: int = 50,
+        w_tol: float = 1e-4,
+        v_tol: float = 1e-4,
+        h_tol: float = 1e-4,
     ):
         super().__init__(
             n_components=n_components,
@@ -34,6 +37,9 @@ class INMFOnline(INMFBase):
         self._w_max_iter = w_max_iter
         self._v_max_iter = v_max_iter
         self._h_max_iter = h_max_iter
+        self._w_tol = w_tol
+        self._v_tol = v_tol
+        self._h_tol = h_tol
 
 
     def _h_err(self, h, hth, WVWVT, xWVT, VVT):
@@ -97,7 +103,7 @@ class INMFOnline(INMFBase):
                     hth = h.T @ h
                     cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
-                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err, self._h_tol):
                         break
 
                 self.H[k][idx, :] = h
@@ -121,7 +127,7 @@ class INMFOnline(INMFBase):
                     VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
                     cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
 
-                    if self._is_converged(prev_v_err, cur_v_err, prev_v_err):
+                    if self._is_converged(prev_v_err, cur_v_err, prev_v_err, self._v_tol):
                         break
 
                 # Update sufficient statistics for all batches
@@ -141,7 +147,7 @@ class INMFOnline(INMFBase):
                     CW = C @ self.W
                     cur_w_err = self._w_err(CW, E_new, D)
 
-                    if self._is_converged(prev_w_err, cur_w_err, prev_w_err):
+                    if self._is_converged(prev_w_err, cur_w_err, prev_w_err, self._w_tol):
                         break
 
                 i += self._chunk_size
@@ -186,7 +192,7 @@ class INMFOnline(INMFBase):
                     hth = h.T @ h
                     cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
-                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err, self._h_tol):
                         break
 
                 self.H[k][idx, :] = h
@@ -210,7 +216,7 @@ class INMFOnline(INMFBase):
                     VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
                     cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
 
-                    if self._is_converged(prev_v_err, cur_v_err, prev_v_err):
+                    if self._is_converged(prev_v_err, cur_v_err, prev_v_err, self._v_tol):
                         break
 
                 i += self._chunk_size
@@ -244,7 +250,7 @@ class INMFOnline(INMFBase):
                     hth = h.T @ h
                     cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
-                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err, self._h_tol):
                         break
 
                 sum_h_err += cur_h_err
@@ -261,11 +267,11 @@ class INMFOnline(INMFBase):
 
         for i in range(self._max_pass):
             self._update_one_pass()
-            self._update_H_V()
+            #self._update_H_V()
             H_err = self._update_H()
 
             self._cur_err = torch.sqrt(H_err + self._SSX)
-            if self._is_converged(self._prev_err, self._cur_err, self._init_err):
+            if self._is_converged(self._prev_err, self._cur_err, self._init_err, self._tol):
                 self.num_iters = i + 1
                 print(f"    Converged after {self.num_iters} pass(es).")
                 return
