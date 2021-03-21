@@ -44,35 +44,32 @@ class NMFBatch(NMFBase):
         else:
             HW = self._get_HW()
             HW_pow = HW.pow(self._beta - 2)
-            H_factor_numer = (self.X * HW_pow) @ self._W_t
-            H_factor_denom = (HW_pow * HW) @ self._W_t
+            H_factor_numer = (self.X * HW_pow) @ self.W.T
+            H_factor_denom = (HW_pow * HW) @ self.W.T
 
         self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
         self._update_matrix(self.H, H_factor_numer, H_factor_denom)
 
         if self._beta == 2:
-            self._H_t = self.H.T
-            self._HTH = self._H_t @ self.H
+            self._HTH = self.H.T @ self.H
 
 
     def _update_W(self):
         if self._beta == 2:
-            W_factor_numer = self._H_t @ self.X
+            W_factor_numer = self.H.T @ self.X
             W_factor_denom = self._HTH @ self.W
         else:
-            H_t = self.H.T
             HW = self._get_HW()
             HW_pow = HW.pow(self._beta - 2)
-            W_factor_numer = H_t @ (self.X * HW_pow)
-            W_factor_denom = H_t @ (HW_pow * HW)
+            W_factor_numer = self.H.T @ (self.X * HW_pow)
+            W_factor_denom = self.H.T @ (HW_pow * HW)
 
         self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
         self._update_matrix(self.W, W_factor_numer, W_factor_denom)
 
         if self._beta == 2:
-            self._W_t = self.W.T
-            self._WWT = self.W @ self._W_t
-            self._XWT = self.X @ self._W_t
+            self._WWT = self.W @ self.W.T
+            self._XWT = self.X @ self.W.T
 
 
     @torch.no_grad()
@@ -86,6 +83,7 @@ class NMFBatch(NMFBase):
 
             if (i + 1) % 10 == 0:
                 self._cur_err = self._loss()
+                print(f"     n_iter={i+1}, loss = {self._cur_err}.")
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     print(f"    Converged after {self.num_iters} iteration(s).")

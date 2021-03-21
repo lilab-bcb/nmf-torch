@@ -103,7 +103,7 @@ class NMFBase:
 
     def _loss(self, square_root=True):
         if self._beta == 2:
-            res = torch.trace(self._WWT @ self._HTH) / 2 - torch.trace(self._H_t @ self._XWT) + self._X_SS_half
+            res = torch.trace(self._WWT @ self._HTH) / 2 - torch.trace(self.H.T @ self._XWT) + self._X_SS_half
         elif self._beta == 0 or self._beta == 1:
             Y = self._get_HW()
             X_flat = self.X.flatten()
@@ -191,11 +191,9 @@ class NMFBase:
         self.W = W
 
         if self._beta == 2:
-            self._W_t = self.W.T
-            self._WWT = self.W @ self._W_t
-            self._H_t = self.H.T
-            self._HTH = self._H_t @ self.H
-            self._XWT = self.X @ self._W_t
+            self._WWT = self.W @ self.W.T
+            self._HTH = self.H.T @ self.H
+            self._XWT = self.X @ self.W.T
 
         self._init_err = self._loss()
         self._prev_err = self._init_err.clone()

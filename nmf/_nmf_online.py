@@ -43,29 +43,19 @@ class NMFOnline(NMFBase):
         self._h_max_iter = h_max_iter
 
 
-    def _h_err(self, h, WWT, xWT, cache_arr = None):
-        h_t = h.T
-        hth = h_t @ h
-        if cache_arr is not None:
-            cache_arr[0] = h_t
-            cache_arr[1] = hth
+    def _h_err(self, h, hth, WWT, xWT):
         # Forbenious-norm^2 in trace format (No X)
-        res = torch.trace(WWT @ hth) / 2.0 - torch.trace(h_t @ xWT)
+        res = torch.trace(WWT @ hth) / 2.0 - torch.trace(h.T @ xWT)
         # Add regularization terms if needed
         if self._l1_reg_H > 0.0:
-            res += self._l1_reg_H * h_t.norm(p=1)
+            res += self._l1_reg_H * h.norm(p=1)
         if self._l2_reg_H > 0.0:
             res += self._l2_reg_H * torch.trace(hth) / 2.0
         return res
 
 
-    def _W_err(self, A, B, l1_reg_W, l2_reg_W, W_t=None, WWT=None):
-        if W_t is None:
-            W_t = self.W.T
-        if WWT is None:
-            WWT = self.W @ W_t
-
-        res = torch.trace(WWT @ A) / 2.0 - torch.trace(B @ W_t)
+    def _W_err(self, A, B, l1_reg_W, l2_reg_W, WWT):
+        res = torch.trace(WWT @ A) / 2.0 - torch.trace(B @ self.W.T)
         # Add regularization terms if needed
         if l1_reg_W > 0.0:
             res += l1_reg_W * self.W.norm(p=1)
@@ -81,6 +71,7 @@ class NMFOnline(NMFBase):
 
         i = 0
         num_processed = 0
+        WWT = self.W @ self.W.T
         while i < indices.shape[0]:
             idx = indices[i:(i+self._chunk_size)]
             cur_chunksize = idx.shape[0]
@@ -88,9 +79,8 @@ class NMFOnline(NMFBase):
             h = self.H[idx, :]
 
             # Online update H.
-            W_t = self.W.T
-            WWT = self.W @ W_t
-            xWT = x @ W_t
+            hth = h.T @ h
+            xWT = x @ self.W.T
 
             if self._l1_reg_H > 0.0:
                 h_factor_numer = xWT - self._l1_reg_H
@@ -98,8 +88,7 @@ class NMFOnline(NMFBase):
             else:
                 h_factor_numer = xWT
 
-            cache_arr = [None, None]
-            cur_h_err = self._h_err(h, WWT, xWT, cache_arr)
+            cur_h_err = self._h_err(h, hth, WWT, xWT)
 
             for j in range(self._h_max_iter):
                 prev_h_err = cur_h_err
@@ -108,7 +97,8 @@ class NMFOnline(NMFBase):
                 if self._l2_reg_H:
                     h_factor_denom += self._l2_reg_H * h
                 self._update_matrix(h, h_factor_numer, h_factor_denom)
-                cur_h_err = self._h_err(h, WWT, xWT, cache_arr)
+                hth = h.T @ h
+                cur_h_err = self._h_err(h, hth, WWT, xWT)
 
                 if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
                     break
@@ -116,7 +106,6 @@ class NMFOnline(NMFBase):
             self.H[idx, :] = h
 
             # Update sufficient statistics A and B.
-            h_t, hth = cache_arr
             num_after = num_processed + cur_chunksize
 
             A *= num_processed
@@ -124,7 +113,7 @@ class NMFOnline(NMFBase):
             A /= num_after
 
             B *= num_processed
-            B += h_t @ x
+            B += h.T @ x
             B /= num_after
 
             num_processed = num_after
@@ -136,7 +125,7 @@ class NMFOnline(NMFBase):
             else:
                 W_factor_numer = B
 
-            cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, W_t, WWT)
+            cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, WWT)
 
             for j in range(self._w_max_iter):
                 prev_W_err = cur_W_err
@@ -145,32 +134,34 @@ class NMFOnline(NMFBase):
                 if l2_reg_W > 0.0:
                     W_factor_denom += l2_reg_W * self.W
                 self._update_matrix(self.W, W_factor_numer, W_factor_denom)
-                cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W)
+                WWT = self.W @ self.W.T
+                cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, WWT)
 
                 if self._is_converged(prev_W_err, cur_W_err, prev_W_err):
                     break
 
             i += self._chunk_size
 
+        return WWT
 
-    def _update_H(self):
-        W_t = self.W.T
-        WWT = self.W @ W_t
 
+    def _update_H(self, WWT):
         i = 0
-        sum_h_err = 0.
+        sum_h_err = 0.0
         while i < self.H.shape[0]:
             x = self.X[i:(i+self._chunk_size), :]
             h = self.H[i:(i+self._chunk_size), :]
 
-            xWT = x @ W_t
+            hth = h.T @ h
+            xWT = x @ self.W.T
+
             if self._l1_reg_H > 0.0:
                 h_factor_numer = xWT - self._l1_reg_H
                 h_factor_numer[h_factor_numer < 0.0] = 0.0
             else:
                 h_factor_numer = xWT
 
-            cur_h_err = self._h_err(h, WWT, xWT)
+            cur_h_err = self._h_err(h, hth, WWT, xWT)
 
             for j in range(self._h_max_iter):
                 prev_h_err = cur_h_err
@@ -179,7 +170,8 @@ class NMFOnline(NMFBase):
                 if self._l2_reg_H:
                     h_factor_denom += self._l2_reg_H * h
                 self._update_matrix(h, h_factor_numer, h_factor_denom)
-                cur_h_err = self._h_err(h, WWT, xWT)
+                hth = h.T @ h
+                cur_h_err = self._h_err(h, hth, WWT, xWT)
 
                 if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
                     break
@@ -202,12 +194,11 @@ class NMFOnline(NMFBase):
         l2_reg_W = self._l2_reg_W / self.X.shape[0]
 
         for i in range(self._max_pass):
-            self._update_one_pass(l1_reg_W, l2_reg_W)
-
-            # Update H again at the end of each pass.
-            H_err = self._update_H()
+            WWT = self._update_one_pass(l1_reg_W, l2_reg_W)
+            H_err = self._update_H(WWT) # Update H again at the end of each pass.
 
             self._cur_err = torch.sqrt(2 * (H_err + self._X_SS_half + self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)))
+            print(f"  iter={i+1}, loss={self._cur_err}.")
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
                 print(f"    Converged after {self.num_iters} pass(es).")
