@@ -138,7 +138,7 @@ def run_nmf(
         else:
             print("CUDA is not available on your machine. Use CPU mode instead.")
 
-    if update_method in ['batch', 'online']:
+    if update_method in ['batch mu', 'online mu', 'batch hals', 'online hals']:
         if beta_loss != 2 and update_method == 'online':
             print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
             update_method = 'batch'
