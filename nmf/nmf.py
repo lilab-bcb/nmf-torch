@@ -3,13 +3,15 @@ import torch
 from typing import Union, Tuple
 from ._nmf_batch import NMFBatch
 from ._nmf_online import NMFOnline
+from ._nmf_batch_hals import NMFBatchHALS
+from ._nmf_online_hals import NMFOnlineHALS
 
 def run_nmf(
     X: Union[np.array, torch.tensor],
     n_components: int,
     init: str = "nndsvdar",
     beta_loss: Union[str, float] = "frobenius",
-    update_method: str = "batch",
+    update_method: str = "batch mu",
     max_iter: int = 200,
     tol: float = 1e-4,
     random_state: int = 0,
@@ -141,7 +143,7 @@ def run_nmf(
             print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
             update_method = 'batch'
 
-        if update_method == 'batch':
+        if update_method == 'batch mu':
             model = NMFBatch(
                 n_components=n_components,
                 init=init,
@@ -156,8 +158,41 @@ def run_nmf(
                 device_type=device_type,
                 max_iter=max_iter,
             )
-        else:
+        elif update_method == 'online mu':
             model = NMFOnline(
+                n_components=n_components,
+                init=init,
+                beta_loss=beta_loss,
+                tol=tol,
+                random_state=random_state,
+                alpha_W=alpha_W,
+                l1_ratio_W=l1_ratio_W,
+                alpha_H=alpha_H,
+                l1_ratio_H=l1_ratio_H,
+                fp_precision=fp_precision,
+                device_type=device_type,
+                max_pass=online_max_pass,
+                chunk_size=online_chunk_size,
+                w_max_iter=online_w_max_iter,
+                h_max_iter=online_h_max_iter,
+            )
+        elif update_method == 'batch hals':
+            model = NMFBatchHALS(
+                n_components=n_components,
+                init=init,
+                beta_loss=beta_loss,
+                tol=tol,
+                random_state=random_state,
+                alpha_W=alpha_W,
+                l1_ratio_W=l1_ratio_W,
+                alpha_H=alpha_H,
+                l1_ratio_H=l1_ratio_H,
+                fp_precision=fp_precision,
+                device_type=device_type,
+                max_iter=max_iter,
+            )
+        else:
+            model = NMFOnlineHALS(
                 n_components=n_components,
                 init=init,
                 beta_loss=beta_loss,
