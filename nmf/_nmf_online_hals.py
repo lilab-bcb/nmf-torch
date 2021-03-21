@@ -4,7 +4,7 @@ from typing import Union
 from ._nmf_base import NMFBase
 
 
-class NMFOnline(NMFBase):
+class NMFOnlineHALS(NMFBase):
     def __init__(
         self,
         n_components: int,
@@ -41,6 +41,7 @@ class NMFOnline(NMFBase):
         self._chunk_size = chunk_size
         self._w_max_iter = w_max_iter
         self._h_max_iter = h_max_iter
+        self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
 
 
     def _h_err(self, h, hth, WWT, xWT):
@@ -82,21 +83,26 @@ class NMFOnline(NMFBase):
             hth = h.T @ h
             xWT = x @ self.W.T
 
-            if self._l1_reg_H > 0.0:
-                h_factor_numer = xWT - self._l1_reg_H
-                h_factor_numer[h_factor_numer < 0.0] = 0.0
-            else:
-                h_factor_numer = xWT
-
             cur_h_err = self._h_err(h, hth, WWT, xWT)
 
             for j in range(self._h_max_iter):
                 prev_h_err = cur_h_err
 
-                h_factor_denom = h @ WWT
-                if self._l2_reg_H:
-                    h_factor_denom += self._l2_reg_H * h
-                self._update_matrix(h, h_factor_numer, h_factor_denom)
+                for k in range(self.k):
+                    numer = xWT[:, k] - h @ WWT[:, k]
+                    if self._l1_reg_H > 0.0:
+                        numer -= self._l1_reg_H
+                    if self._l2_reg_H > 0.0:
+                        denom = WWT[k, k] + self._l2_reg_H
+                        hvec = h[:, k] * (WWT[k, k] / denom) + numer / denom
+                    else:
+                        hvec = h[:, k] + numer / WWT[k, k]
+                    if torch.isnan(hvec).sum() > 0:
+                        hvec[:] = 0.0 # divide zero error: set hvec to 0
+                    else:
+                        hvec = hvec.maximum(self._zero)
+                    h[:, k] = hvec
+
                 hth = h.T @ h
                 cur_h_err = self._h_err(h, hth, WWT, xWT)
 
@@ -119,21 +125,26 @@ class NMFOnline(NMFBase):
             num_processed = num_after
 
             # Online update W.
-            if l1_reg_W > 0.0:
-                W_factor_numer = B - l1_reg_W
-                W_factor_numer[W_factor_numer < 0.0] = 0.0
-            else:
-                W_factor_numer = B
-
             cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, WWT)
 
             for j in range(self._w_max_iter):
                 prev_W_err = cur_W_err
 
-                W_factor_denom = A @ self.W
-                if l2_reg_W > 0.0:
-                    W_factor_denom += l2_reg_W * self.W
-                self._update_matrix(self.W, W_factor_numer, W_factor_denom)
+                for k in range(self.k):
+                    numer = B[k, :] - A[k, :] @ self.W
+                    if l1_reg_W > 0.0:
+                        numer -= l1_reg_W
+                    if l2_reg_W > 0.0:
+                        denom = A[k, k] + l2_reg_W
+                        w_new = self.W[k, :] * (A[k, k] / denom) + numer / denom
+                    else:
+                        w_new = self.W[k, :] + numer / A[k, k]
+                    if torch.isnan(w_new).sum() > 0:
+                        w_new[:] = 0.0 # divide zero error: set w_new to 0
+                    else:
+                        w_new = w_new.maximum(self._zero)
+                    self.W[k, :] = w_new
+
                 WWT = self.W @ self.W.T
                 cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, WWT)
 
@@ -155,21 +166,26 @@ class NMFOnline(NMFBase):
             hth = h.T @ h
             xWT = x @ self.W.T
 
-            if self._l1_reg_H > 0.0:
-                h_factor_numer = xWT - self._l1_reg_H
-                h_factor_numer[h_factor_numer < 0.0] = 0.0
-            else:
-                h_factor_numer = xWT
-
             cur_h_err = self._h_err(h, hth, WWT, xWT)
 
             for j in range(self._h_max_iter):
                 prev_h_err = cur_h_err
 
-                h_factor_denom = h @ WWT
-                if self._l2_reg_H:
-                    h_factor_denom += self._l2_reg_H * h
-                self._update_matrix(h, h_factor_numer, h_factor_denom)
+                for k in range(self.k):
+                    numer = xWT[:, k] - h @ WWT[:, k]
+                    if self._l1_reg_H > 0.0:
+                        numer -= self._l1_reg_H
+                    if self._l2_reg_H > 0.0:
+                        denom = WWT[k, k] + self._l2_reg_H
+                        hvec = h[:, k] * (WWT[k, k] / denom) + numer / denom
+                    else:
+                        hvec = h[:, k] + numer / WWT[k, k]
+                    if torch.isnan(hvec).sum() > 0:
+                        hvec[:] = 0.0 # divide zero error: set hvec to 0
+                    else:
+                        hvec = hvec.maximum(self._zero)
+                    h[:, k] = hvec
+
                 hth = h.T @ h
                 cur_h_err = self._h_err(h, hth, WWT, xWT)
 

@@ -37,7 +37,7 @@ class NMFBatchHALS(NMFBase):
         )
 
         self._max_iter = max_iter
-        self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)        
+        self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
 
 
     def _update_H(self):
@@ -91,7 +91,6 @@ class NMFBatchHALS(NMFBase):
 
             if (i + 1) % 10 == 0:
                 self._cur_err = self._loss()
-                print(f"iter = {i+1}, loss = {self._cur_err}.")
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     print(f"    Converged after {self.num_iters} iteration(s).")
