@@ -66,9 +66,12 @@ class INMFBase:
     def _loss(self):
         res = 0.0
         for k in range(self._n_batches):
-            res += torch.trace(self._HTH[k] @ self._WVWVT[k]) - 2 * torch.trace(self.H[k].T @ self._XWVT[k])
-            if self._lambda > 0:
-                res += self._lambda * torch.trace(self._VVT[k] @ self._HTH[k])
+            # res += torch.trace(self._HTH[k] @ self._WVWVT[k]) - 2 * torch.trace(self.H[k].T @ self._XWVT[k])
+            # if self._lambda > 0:
+            #     res += self._lambda * torch.trace(self._VVT[k] @ self._HTH[k])
+            res += (self._HTH[k] * self._WVWVT[k]).sum(dtype=torch.double) - 2.0 * (self.H[k] * self._XWVT[k]).sum(dtype=torch.double)
+            if self._lambda > 0.0:
+                res += self._lambda * (self._VVT[k] * self._HTH[k]).sum(dtype=torch.double)
         res += self._SSX
         return torch.sqrt(res)
 
@@ -76,8 +79,8 @@ class INMFBase:
     def reconstruction_err(self):
         return self._cur_err
 
-    def _is_converged(self, prev_err, cur_err, init_err, tolerance):
-        return torch.abs((prev_err - cur_err) / init_err) < tolerance
+    def _is_converged(self, prev_err, cur_err, init_err):
+        return torch.abs((prev_err - cur_err) / init_err) < self._tol
 
     def _update_matrix(self, mat, numer, denom):
         mat *= (numer / denom)
