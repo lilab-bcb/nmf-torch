@@ -39,6 +39,7 @@ class NMFBatch(NMFBase):
             if beta_loss != 2.0:
                 print("HALS only supports beta loss = 2.0. Switch to MU update method.")
                 update_method = 'mu'
+            self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
         self._update_method = update_method
 
         self._max_iter = max_iter

@@ -44,6 +44,9 @@ class NMFOnline(NMFBase):
         self._w_max_iter = w_max_iter
         self._h_max_iter = h_max_iter
 
+        if update_method == 'hals':
+            self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
+
 
     def _h_err(self, h, hth, WWT, xWT):
         # Forbenious-norm^2 in trace format (No X)
