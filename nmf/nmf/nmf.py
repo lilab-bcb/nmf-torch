@@ -1,10 +1,9 @@
-import numpy as np
 import torch
+import numpy as np
+
 from typing import Union, Tuple
 from ._nmf_batch import NMFBatch
 from ._nmf_online import NMFOnline
-from ._nmf_batch_hals import NMFBatchHALS
-from ._nmf_online_hals import NMFOnlineHALS
 
 def run_nmf(
     X: Union[np.array, torch.tensor],
@@ -139,11 +138,12 @@ def run_nmf(
             print("CUDA is not available on your machine. Use CPU mode instead.")
 
     if update_method in ['batch mu', 'online mu', 'batch hals', 'online hals']:
-        if beta_loss != 2 and update_method == 'online':
+        update_config = update_method.split(' ')
+        if beta_loss != 2 and update_config[0] == 'online':
             print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
-            update_method = 'batch'
+            update_config[0] = 'batch'
 
-        if update_method == 'batch mu':
+        if update_config[0] == 'batch':
             model = NMFBatch(
                 n_components=n_components,
                 init=init,
@@ -156,9 +156,10 @@ def run_nmf(
                 l1_ratio_H=l1_ratio_H,
                 fp_precision=fp_precision,
                 device_type=device_type,
+                update_method=update_config[1],
                 max_iter=max_iter,
             )
-        elif update_method == 'online mu':
+        else:
             model = NMFOnline(
                 n_components=n_components,
                 init=init,
@@ -171,39 +172,7 @@ def run_nmf(
                 l1_ratio_H=l1_ratio_H,
                 fp_precision=fp_precision,
                 device_type=device_type,
-                max_pass=online_max_pass,
-                chunk_size=online_chunk_size,
-                w_max_iter=online_w_max_iter,
-                h_max_iter=online_h_max_iter,
-            )
-        elif update_method == 'batch hals':
-            model = NMFBatchHALS(
-                n_components=n_components,
-                init=init,
-                beta_loss=beta_loss,
-                tol=tol,
-                random_state=random_state,
-                alpha_W=alpha_W,
-                l1_ratio_W=l1_ratio_W,
-                alpha_H=alpha_H,
-                l1_ratio_H=l1_ratio_H,
-                fp_precision=fp_precision,
-                device_type=device_type,
-                max_iter=max_iter,
-            )
-        else:
-            model = NMFOnlineHALS(
-                n_components=n_components,
-                init=init,
-                beta_loss=beta_loss,
-                tol=tol,
-                random_state=random_state,
-                alpha_W=alpha_W,
-                l1_ratio_W=l1_ratio_W,
-                alpha_H=alpha_H,
-                l1_ratio_H=l1_ratio_H,
-                fp_precision=fp_precision,
-                device_type=device_type,
+                update_method=update_config[1],
                 max_pass=online_max_pass,
                 chunk_size=online_chunk_size,
                 w_max_iter=online_w_max_iter,
@@ -211,7 +180,7 @@ def run_nmf(
             )
 
     else:
-        raise ValueError("Parameter update_method must be a valid value from ['batch', 'online']!")
+        raise ValueError("Parameter update_method must be a valid value from ['batch mu', 'batch hals', 'online mu', 'online hals']!")
 
     H = model.fit_transform(X)
     W = model.W

@@ -18,6 +18,7 @@ class NMFOnline(NMFBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
+        update_method: str,
         max_pass: int,
         chunk_size: int,
         w_max_iter: int,
@@ -37,6 +38,7 @@ class NMFOnline(NMFBase):
             device_type=device_type,
         )
 
+        self._update_method = update_method
         self._max_pass = max_pass
         self._chunk_size = chunk_size
         self._w_max_iter = w_max_iter
@@ -64,7 +66,7 @@ class NMFOnline(NMFBase):
         return res
 
 
-    def _update_one_pass(self, l1_reg_W, l2_reg_W):
+    def _update_one_pass_mu(self, l1_reg_W, l2_reg_W):
         indices = torch.randperm(self.X.shape[0], device=self._device_type)
         A = torch.zeros((self.k, self.k), dtype=self._tensor_dtype, device=self._device_type)
         B = torch.zeros((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type)
@@ -145,7 +147,7 @@ class NMFOnline(NMFBase):
         return WWT
 
 
-    def _update_H(self, WWT):
+    def _update_H_mu(self, WWT):
         i = 0
         sum_h_err = 0.0
         while i < self.H.shape[0]:
@@ -182,6 +184,150 @@ class NMFOnline(NMFBase):
         return sum_h_err
 
 
+    def _update_one_pass_hals(self, l1_reg_W, l2_reg_W):
+        indices = torch.randperm(self.X.shape[0], device=self._device_type)
+        A = torch.zeros((self.k, self.k), dtype=self._tensor_dtype, device=self._device_type)
+        B = torch.zeros((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type)
+
+        i = 0
+        num_processed = 0
+        WWT = self.W @ self.W.T
+        while i < indices.shape[0]:
+            idx = indices[i:(i+self._chunk_size)]
+            cur_chunksize = idx.shape[0]
+            x = self.X[idx, :]
+            h = self.H[idx, :]
+
+            # Online update H.
+            hth = h.T @ h
+            xWT = x @ self.W.T
+
+            cur_h_err = self._h_err(h, hth, WWT, xWT)
+
+            for j in range(self._h_max_iter):
+                prev_h_err = cur_h_err
+
+                for k in range(self.k):
+                    numer = xWT[:, k] - h @ WWT[:, k]
+                    if self._l1_reg_H > 0.0:
+                        numer -= self._l1_reg_H
+                    if self._l2_reg_H > 0.0:
+                        denom = WWT[k, k] + self._l2_reg_H
+                        hvec = h[:, k] * (WWT[k, k] / denom) + numer / denom
+                    else:
+                        hvec = h[:, k] + numer / WWT[k, k]
+                    if torch.isnan(hvec).sum() > 0:
+                        hvec[:] = 0.0 # divide zero error: set hvec to 0
+                    else:
+                        hvec = hvec.maximum(self._zero)
+                    h[:, k] = hvec
+
+                hth = h.T @ h
+                cur_h_err = self._h_err(h, hth, WWT, xWT)
+
+                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    break
+
+            self.H[idx, :] = h
+
+            # Update sufficient statistics A and B.
+            num_after = num_processed + cur_chunksize
+
+            A *= num_processed
+            A += hth
+            A /= num_after
+
+            B *= num_processed
+            B += h.T @ x
+            B /= num_after
+
+            num_processed = num_after
+
+            # Online update W.
+            cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, WWT)
+
+            for j in range(self._w_max_iter):
+                prev_W_err = cur_W_err
+
+                for k in range(self.k):
+                    numer = B[k, :] - A[k, :] @ self.W
+                    if l1_reg_W > 0.0:
+                        numer -= l1_reg_W
+                    if l2_reg_W > 0.0:
+                        denom = A[k, k] + l2_reg_W
+                        w_new = self.W[k, :] * (A[k, k] / denom) + numer / denom
+                    else:
+                        w_new = self.W[k, :] + numer / A[k, k]
+                    if torch.isnan(w_new).sum() > 0:
+                        w_new[:] = 0.0 # divide zero error: set w_new to 0
+                    else:
+                        w_new = w_new.maximum(self._zero)
+                    self.W[k, :] = w_new
+
+                WWT = self.W @ self.W.T
+                cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, WWT)
+
+                if self._is_converged(prev_W_err, cur_W_err, prev_W_err):
+                    break
+
+            i += self._chunk_size
+
+        return WWT
+
+
+    def _update_H_hals(self, WWT):
+        i = 0
+        sum_h_err = 0.0
+        while i < self.H.shape[0]:
+            x = self.X[i:(i+self._chunk_size), :]
+            h = self.H[i:(i+self._chunk_size), :]
+
+            hth = h.T @ h
+            xWT = x @ self.W.T
+
+            cur_h_err = self._h_err(h, hth, WWT, xWT)
+
+            for j in range(self._h_max_iter):
+                prev_h_err = cur_h_err
+
+                for k in range(self.k):
+                    numer = xWT[:, k] - h @ WWT[:, k]
+                    if self._l1_reg_H > 0.0:
+                        numer -= self._l1_reg_H
+                    if self._l2_reg_H > 0.0:
+                        denom = WWT[k, k] + self._l2_reg_H
+                        hvec = h[:, k] * (WWT[k, k] / denom) + numer / denom
+                    else:
+                        hvec = h[:, k] + numer / WWT[k, k]
+                    if torch.isnan(hvec).sum() > 0:
+                        hvec[:] = 0.0 # divide zero error: set hvec to 0
+                    else:
+                        hvec = hvec.maximum(self._zero)
+                    h[:, k] = hvec
+
+                hth = h.T @ h
+                cur_h_err = self._h_err(h, hth, WWT, xWT)
+
+                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    break
+
+            sum_h_err += cur_h_err
+            i += self._chunk_size
+
+        return sum_h_err
+
+
+    def _update(self, l1_reg_W, l2_reg_W):
+        if self._update_method == 'mu':
+            WWT = self._update_one_pass_mu(l1_reg_W, l2_reg_W)
+            H_err = self._update_H_mu(WWT)    # Update H again at the end of each pass.
+        else:
+            WWT = self._update_one_pass_hals(l1_reg_W, l2_reg_W)
+            H_err = self._update_H_hals(WWT)    # Update H again at the end of each pass.
+
+        return H_err
+
+
     @torch.no_grad()
     def fit(self, X):
         super().fit(X)
@@ -194,8 +340,7 @@ class NMFOnline(NMFBase):
         l2_reg_W = self._l2_reg_W / self.X.shape[0]
 
         for i in range(self._max_pass):
-            WWT = self._update_one_pass(l1_reg_W, l2_reg_W)
-            H_err = self._update_H(WWT) # Update H again at the end of each pass.
+            H_err = self._update(l1_reg_W, l2_reg_W)
 
             self._cur_err = torch.sqrt(2 * (H_err + self._X_SS_half + self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)))
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):

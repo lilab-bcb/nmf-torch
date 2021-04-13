@@ -4,7 +4,7 @@ from typing import Union
 from ._nmf_base import NMFBase
 
 
-class NMFBatchHALS(NMFBase):
+class NMFBatch(NMFBase):
     def __init__(
         self,
         n_components: int,
@@ -18,10 +18,9 @@ class NMFBatchHALS(NMFBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
+        update_method: str,
         max_iter: int,
     ):
-        assert beta_loss == 2.0 # only work for F norm for now
-
         super().__init__(
             n_components=n_components,
             init=init,
@@ -36,11 +35,51 @@ class NMFBatchHALS(NMFBase):
             device_type=device_type,
         )
 
+        if update_method == 'hals':
+            if beta_loss != 2.0:
+                print("HALS only supports beta loss = 2.0. Switch to MU update method.")
+                update_method = 'mu'
+        self._update_method = update_method
+
         self._max_iter = max_iter
-        self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
 
 
-    def _update_H(self):
+    def _update_H_mu(self):
+        if self._beta == 2:
+            H_factor_numer = self._XWT.clone()
+            H_factor_denom = self.H @ self._WWT
+        else:
+            HW = self._get_HW()
+            HW_pow = HW.pow(self._beta - 2)
+            H_factor_numer = (self.X * HW_pow) @ self.W.T
+            H_factor_denom = (HW_pow * HW) @ self.W.T
+
+        self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
+        self._update_matrix(self.H, H_factor_numer, H_factor_denom)
+
+        if self._beta == 2:
+            self._HTH = self.H.T @ self.H
+
+
+    def _update_W_mu(self):
+        if self._beta == 2:
+            W_factor_numer = self.H.T @ self.X
+            W_factor_denom = self._HTH @ self.W
+        else:
+            HW = self._get_HW()
+            HW_pow = HW.pow(self._beta - 2)
+            W_factor_numer = self.H.T @ (self.X * HW_pow)
+            W_factor_denom = self.H.T @ (HW_pow * HW)
+
+        self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
+        self._update_matrix(self.W, W_factor_numer, W_factor_denom)
+
+        if self._beta == 2:
+            self._WWT = self.W @ self.W.T
+            self._XWT = self.X @ self.W.T
+
+
+    def _update_H_hals(self):
         for k in range(self.k):
             numer = self._XWT[:, k] - self.H @ self._WWT[:, k]
             if self._l1_reg_H > 0.0:
@@ -59,7 +98,7 @@ class NMFBatchHALS(NMFBase):
         self._HTH = self.H.T @ self.H
 
 
-    def _update_W(self):
+    def _update_W_hals(self):
         HTX = self.H.T @ self.X
         for k in range(self.k):
             numer = HTX[k, :] - self._HTH[k, :] @ self.W
@@ -78,6 +117,20 @@ class NMFBatchHALS(NMFBase):
 
         self._WWT = self.W @ self.W.T
         self._XWT = self.X @ self.W.T
+
+
+    def _update_H(self):
+        if self._update_method == 'mu':
+            self._update_H_mu()
+        else:
+            self._update_H_hals()
+
+
+    def _update_W(self):
+        if self._update_method == 'mu':
+            self._update_W_mu()
+        else:
+            self._update_W_hals()
 
 
     @torch.no_grad()
