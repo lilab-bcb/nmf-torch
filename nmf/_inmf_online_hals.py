@@ -3,7 +3,7 @@ import torch
 from ._inmf_base import INMFBase
 from typing import List, Union
 
-class INMFOnline(INMFBase):
+class INMFOnlineHALS(INMFBase):
     def __init__(
         self,
         n_components: int,
@@ -16,8 +16,11 @@ class INMFOnline(INMFBase):
         max_pass: int = 10,
         chunk_size: int = 2000,
         w_max_iter: int = 200,
-        v_max_iter: int = 200,
+        v_max_iter: int = 50,
         h_max_iter: int = 50,
+        w_tol: float = 1e-4,
+        v_tol: float = 1e-4,
+        h_tol: float = 1e-4,
     ):
         super().__init__(
             n_components=n_components,
@@ -86,14 +89,25 @@ class INMFOnline(INMFBase):
                 hth = h.T @ h
                 xWVT = x @ WV.T
 
-                h_factor_numer = xWVT
                 cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
                 for j in range(self._h_max_iter):
                     prev_h_err = cur_h_err
 
-                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
-                    self._update_matrix(h, h_factor_numer, h_factor_denom)
+                    for l in range(self._n_components):
+                        if self._lambda > 0.0:
+                            numer = xWVT[:, l] - h @ (WVWVT[:, l] + self._lambda * VVT[:, l])
+                            denom = WVWVT[l, l] + self._lambda * VVT[l, l]
+                        else:
+                            numer = xWVT[:, l] - h @ WVWVT[:, l]
+                            denom = WVWVT[l, l]    
+                        hvec = h[:, l] + numer / denom
+                        if torch.isnan(hvec).sum() > 0:
+                            hvec[:] = 0.0 # divide zero error: set h_new to 0
+                        else:
+                            hvec = hvec.maximum(self._zero)
+                        h[:, l] = hvec
+
                     hth = h.T @ h
                     cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
@@ -108,14 +122,21 @@ class INMFOnline(INMFBase):
                 B += htx
 
                 # Update V
-                V_factor_numer = B
                 cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
 
                 for j in range(self._v_max_iter):
                     prev_v_err = cur_v_err
 
-                    V_factor_denom = A @ (WV + self._lambda * self.V[k])
-                    self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
+                    for l in range(self._n_components):
+                        numer = B[l, :] - A[l, :] @ (self.W + (1.0 + self._lambda) * self.V[k])
+                        denom = (1.0 + self._lambda) * A[l, l]
+                        v_new = self.V[k][l, :] + numer / denom
+                        if torch.isnan(v_new).sum() > 0:
+                            v_new[:] = 0.0 # divide zero error: set v_new to 0
+                        else:
+                            v_new = v_new.maximum(self._zero)
+                        self.V[k][l, :] = v_new
+
                     WV = self.W + self.V[k]
                     WVWVT = WV @ WV.T
                     VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
@@ -131,13 +152,17 @@ class INMFOnline(INMFBase):
                 E_new = E + A @ self.V[k]
 
                 # Update W
-                W_factor_numer = D
                 cur_w_err = self._w_err(CW, E_new, D)
                 for j in range(self._w_max_iter):
                     prev_w_err = cur_w_err
 
-                    W_factor_denom = CW + E_new
-                    self._update_matrix(self.W, W_factor_numer, W_factor_denom)
+                    for l in range(self._n_components):
+                        w_new = self.W[l, :] + (D[l, :] - E_new[l, :] - CW[l, :]) / C[l, l]
+                        if torch.isnan(w_new).sum() > 0:
+                            w_new[:] = 0.0 # divide zero error: set w_new to 0
+                        else:
+                            w_new = w_new.maximum(self._zero)
+                        self.W[l, :] = w_new
                     CW = C @ self.W
                     cur_w_err = self._w_err(CW, E_new, D)
 
@@ -175,14 +200,25 @@ class INMFOnline(INMFBase):
                 hth = h.T @ h
                 xWVT = x @ WV.T
 
-                h_factor_numer = xWVT
                 cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
                 for j in range(self._h_max_iter):
                     prev_h_err = cur_h_err
 
-                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
-                    self._update_matrix(h, h_factor_numer, h_factor_denom)
+                    for l in range(self._n_components):
+                        if self._lambda > 0.0:
+                            numer = xWVT[:, l] - h @ (WVWVT[:, l] + self._lambda * VVT[:, l])
+                            denom = WVWVT[l, l] + self._lambda * VVT[l, l]
+                        else:
+                            numer = xWVT[:, l] - h @ WVWVT[:, l]
+                            denom = WVWVT[l, l]    
+                        hvec = h[:, l] + numer / denom
+                        if torch.isnan(hvec).sum() > 0:
+                            hvec[:] = 0.0 # divide zero error: set h_new to 0
+                        else:
+                            hvec = hvec.maximum(self._zero)
+                        h[:, l] = hvec
+
                     hth = h.T @ h
                     cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
@@ -197,14 +233,21 @@ class INMFOnline(INMFBase):
                 B += htx
 
                 # Update V
-                V_factor_numer = B
                 cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
 
                 for j in range(self._v_max_iter):
                     prev_v_err = cur_v_err
 
-                    V_factor_denom = A @ (WV + self._lambda * self.V[k])
-                    self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
+                    for l in range(self._n_components):
+                        numer = B[l, :] - A[l, :] @ (self.W + (1.0 + self._lambda) * self.V[k])
+                        denom = (1.0 + self._lambda) * A[l, l]
+                        v_new = self.V[k][l, :] + numer / denom
+                        if torch.isnan(v_new).sum() > 0:
+                            v_new[:] = 0.0 # divide zero error: set v_new to 0
+                        else:
+                            v_new = v_new.maximum(self._zero)
+                        self.V[k][l, :] = v_new
+
                     WV = self.W + self.V[k]
                     WVWVT = WV @ WV.T
                     VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
@@ -233,14 +276,25 @@ class INMFOnline(INMFBase):
                 hth = h.T @ h
                 xWVT = x @ WV.T
 
-                h_factor_numer = xWVT
                 cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
                 for j in range(self._h_max_iter):
                     prev_h_err = cur_h_err
 
-                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
-                    self._update_matrix(h, h_factor_numer, h_factor_denom)
+                    for l in range(self._n_components):
+                        if self._lambda > 0.0:
+                            numer = xWVT[:, l] - h @ (WVWVT[:, l] + self._lambda * VVT[:, l])
+                            denom = WVWVT[l, l] + self._lambda * VVT[l, l]
+                        else:
+                            numer = xWVT[:, l] - h @ WVWVT[:, l]
+                            denom = WVWVT[l, l]    
+                        hvec = h[:, l] + numer / denom
+                        if torch.isnan(hvec).sum() > 0:
+                            hvec[:] = 0.0 # divide zero error: set h_new to 0
+                        else:
+                            hvec = hvec.maximum(self._zero)
+                        h[:, l] = hvec
+
                     hth = h.T @ h
                     cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
@@ -265,7 +319,7 @@ class INMFOnline(INMFBase):
             H_err = self._update_H()
 
             self._cur_err = torch.sqrt(H_err + self._SSX)
-            if self._is_converged(self._prev_err, self._cur_err, self._init_err):
+            if self._is_converged(self._prev_err, self._cur_err, self._init_err, self._tol):
                 self.num_iters = i + 1
                 print(f"    Converged after {self.num_iters} pass(es).")
                 return

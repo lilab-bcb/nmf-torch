@@ -46,7 +46,7 @@ class NMFOnlineHALS(NMFBase):
 
     def _h_err(self, h, hth, WWT, xWT):
         # Forbenious-norm^2 in trace format (No X)
-        res = torch.trace(WWT @ hth) / 2.0 - torch.trace(h.T @ xWT)
+        res = self._trace(WWT, hth) / 2.0 - self._trace(h, xWT)
         # Add regularization terms if needed
         if self._l1_reg_H > 0.0:
             res += self._l1_reg_H * h.norm(p=1)
@@ -56,7 +56,7 @@ class NMFOnlineHALS(NMFBase):
 
 
     def _W_err(self, A, B, l1_reg_W, l2_reg_W, WWT):
-        res = torch.trace(WWT @ A) / 2.0 - torch.trace(B @ self.W.T)
+        res = self._trace(WWT, A) / 2.0 - self._trace(B, self.W)
         # Add regularization terms if needed
         if l1_reg_W > 0.0:
             res += l1_reg_W * self.W.norm(p=1)

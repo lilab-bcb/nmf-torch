@@ -101,9 +101,14 @@ class NMFBase:
         return res
 
 
+    def _trace(self, A, B):
+        # return trace(A.T @ B) or trace(A @ B.T)
+        return torch.dot(A.ravel(), B.ravel())
+
+
     def _loss(self, square_root=True):
         if self._beta == 2:
-            res = torch.trace(self._WWT @ self._HTH) / 2 - torch.trace(self.H.T @ self._XWT) + self._X_SS_half
+            res = self._trace(self._WWT, self._HTH) / 2.0 - self._trace(self.H, self._XWT) + self._X_SS_half
         elif self._beta == 0 or self._beta == 1:
             Y = self._get_HW()
             X_flat = self.X.flatten()

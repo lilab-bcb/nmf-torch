@@ -63,15 +63,16 @@ class INMFBase:
         self._prev_err = self._init_err
         self._cur_err = self._init_err
 
+    def _trace(self, A, B):
+        # return trace(A.T @ B) or trace(A @ B.T)
+        return torch.dot(A.ravel(), B.ravel())
+
     def _loss(self):
         res = 0.0
         for k in range(self._n_batches):
-            # res += torch.trace(self._HTH[k] @ self._WVWVT[k]) - 2 * torch.trace(self.H[k].T @ self._XWVT[k])
-            # if self._lambda > 0:
-            #     res += self._lambda * torch.trace(self._VVT[k] @ self._HTH[k])
-            res += (self._HTH[k] * self._WVWVT[k]).sum(dtype=torch.double) - 2.0 * (self.H[k] * self._XWVT[k]).sum(dtype=torch.double)
+            res += self._trace(self._HTH[k], self._WVWVT[k]) - 2.0 * self._trace(self.H[k], self._XWVT[k])
             if self._lambda > 0.0:
-                res += self._lambda * (self._VVT[k] * self._HTH[k]).sum(dtype=torch.double)
+                res += self._lambda * self._trace(self._VVT[k], self._HTH[k])
         res += self._SSX
         return torch.sqrt(res)
 

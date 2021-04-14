@@ -3,7 +3,7 @@ import torch
 from ._inmf_base import INMFBase
 from typing import List, Union
 
-class INMFBatchHALS(INMFBase):
+class INMFBatchHALSWrong(INMFBase):
     def __init__(
         self,
         n_components: int,
@@ -36,13 +36,12 @@ class INMFBatchHALS(INMFBase):
         for k in range(self._n_batches):
             # Update H[k]
             for l in range(self._n_components):
+                numer = self._XWVT[k][:, l] - self.H[k] @ self._WVWVT[k][:, l]
                 if self._lambda > 0.0:
-                    numer = self._XWVT[k][:, l] - self.H[k] @ (self._WVWVT[k][:, l] + self._lambda * self._VVT[k][:, l])
                     denom = self._WVWVT[k][l, l] + self._lambda * self._VVT[k][l, l]
+                    h_new = self.H[k][:, l] * (self._WVWVT[k][l, l] / denom) + numer / denom
                 else:
-                    numer = self._XWVT[k][:, l] - self.H[k] @ self._WVWVT[k][:, l]
-                    denom = self._WVWVT[k][l, l]
-                h_new = self.H[k][:, l] + numer / denom
+                    h_new = self.H[k][:, l] + numer / self._WVWVT[k][l, l]
                 if torch.isnan(h_new).sum() > 0:
                     h_new[:] = 0.0 # divide zero error: set h_new to 0
                 else:
@@ -54,9 +53,9 @@ class INMFBatchHALS(INMFBase):
             # Update V[k]
             HTX = self.H[k].T @ self.X[k]
             for l in range(self._n_components):
-                numer = HTX[l, :] - self._HTH[k][l, :] @ (self.W + (1.0 + self._lambda) * self.V[k])
-                denom = (1.0 + self._lambda) * self._HTH[k][l, l]
-                v_new = self.V[k][l, :] + numer / denom
+                numer = HTX[l, :] - self._HTH[k][l, :] @ (self.W + self.V[k])
+                denom = 1.0 + self._lambda
+                v_new = self.V[k][l, :] * (1.0 / denom) + numer / (denom * self._HTH[k][l, l])
                 if torch.isnan(v_new).sum() > 0:
                     v_new[:] = 0.0 # divide zero error: set v_new to 0
                 else:

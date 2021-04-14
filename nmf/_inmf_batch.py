@@ -72,7 +72,7 @@ class INMFBatch(INMFBase):
 
             if (i + 1) % 10 == 0:
                 self._cur_err = self._loss()
-                print(f" iter={i+1}, loss={self._cur_err}.")
+                print(f" niter={i+1}, loss={self._cur_err}.")
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     print(f"    Converged after {self.num_iters} iteration(s).")
