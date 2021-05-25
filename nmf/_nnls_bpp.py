@@ -32,7 +32,7 @@ def nnls_bpp(CTC, CTB, X, device_type) -> int:
     F = torch.zeros((q, r), dtype=bool, device=device_type) # y_F = 0, G = ~F, x_G = 0
 
     V = Y < 0.0
-    Vsize = V.sum(axis = 0, dtype = torch.int, device=device_type)
+    Vsize = V.sum(axis = 0, dtype = torch.int)
     I = torch.where(Vsize > 0)[0] # infeasible columns
 
     n_iter = 0
@@ -67,6 +67,10 @@ def nnls_bpp(CTC, CTB, X, device_type) -> int:
             Ii = I[indices == i]
             nF = Fvec.sum()
             nG = q - nF
+            if device_type != 'cpu':
+                Fvec = Fvec.cpu()
+                Ii = Ii.cpu()
+
             if nF > 0:
                 L = torch.cholesky(CTC[np.ix_(Fvec, Fvec)])
                 mesh_idx = np.ix_(Fvec, Ii)
