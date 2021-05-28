@@ -104,7 +104,13 @@ class INMFBase:
             if torch.any(mats[i] < 0):
                 raise ValueError(f"Input matrix {i} is not non-negative. NMF cannot be applied.")
 
-        self.X = mats
+        if self._device_type == 'cpu':
+            self.X = mats
+        else:
+            self.X = []
+            for X in mats:
+                self.X.append(X.cuda())
+
         # Cache Sum of squares of Xs.
         self._SSX = 0.0
         for k in range(self._n_batches):

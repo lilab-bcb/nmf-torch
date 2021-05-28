@@ -37,13 +37,13 @@ class INMFBatchNnlsBpp(INMFBase):
         # Update Hs and Vs and calculate terms for updating W
         for k in range(self._n_batches):
             # Update H[k]
-            n_iter = nnls_bpp(self._WVWVT[k] + self._lambda * self._VVT[k], self._XWVT[k].T, self.H[k].T)        
+            n_iter = nnls_bpp(self._WVWVT[k] + self._lambda * self._VVT[k], self._XWVT[k].T, self.H[k].T, self._device_type)
             # Cache HTH
             self._HTH[k] = self.H[k].T @ self.H[k]
 
             # Update V[k]
             HTX = self.H[k].T @ self.X[k]
-            n_iter = nnls_bpp(self._HTH[k] * (1.0 + self._lambda), HTX - self._HTH[k] @ self.W, self.V[k])
+            n_iter = nnls_bpp(self._HTH[k] * (1.0 + self._lambda), HTX - self._HTH[k] @ self.W, self.V[k], self._device_type)
             # Cache VVT
             if self._lambda > 0.0:
                 self._VVT[k] = self.V[k] @ self.V[k].T
@@ -53,7 +53,7 @@ class INMFBatchNnlsBpp(INMFBase):
             W_denom += self._HTH[k]
 
         # Update W
-        n_iter = nnls_bpp(W_denom, W_numer, self.W)
+        n_iter = nnls_bpp(W_denom, W_numer, self.W, self._device_type)
         # Cache WVWVT and XWVT
         for k in range(self._n_batches):
             WV = self.W + self.V[k]

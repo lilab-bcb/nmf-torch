@@ -2,8 +2,9 @@
 
 import numpy as np
 import torch
+from nmf.cylib.nnls_bpp_utils import _nnls_bpp
 
-def nnls_bpp(CTC, CTB, X) -> int:
+def nnls_bpp(CTC, CTB, X, device_type) -> int:
     """
         min ||CX-B||_F^2
         KKT conditions:
@@ -26,10 +27,10 @@ def nnls_bpp(CTC, CTB, X) -> int:
     Y = -CTB
 
     backup_cap = 3
-    alpha = torch.full([r], backup_cap, dtype=torch.int) # cap on back up rule
-    beta = torch.full([r], q+1, dtype=torch.int) # number of infeasible variables
+    alpha = torch.full([r], backup_cap, dtype=torch.int, device=device_type) # cap on back up rule
+    beta = torch.full([r], q+1, dtype=torch.int, device=device_type) # number of infeasible variables
 
-    F = torch.zeros((q, r), dtype=bool) # y_F = 0, G = ~F, x_G = 0
+    F = torch.zeros((q, r), dtype=bool, device=device_type) # y_F = 0, G = ~F, x_G = 0
 
     V = Y < 0.0
     Vsize = V.sum(axis = 0, dtype = torch.int)
@@ -37,6 +38,7 @@ def nnls_bpp(CTC, CTB, X) -> int:
 
     n_iter = 0
     while I.shape[0] > 0 and n_iter < max_iter:
+        # Case 1: Apply full exchange rule
         idx = Vsize[I] < beta[I]
         col_idx = I[torch.where(idx)[0]]
         if col_idx.shape[0] > 0:
@@ -44,11 +46,15 @@ def nnls_bpp(CTC, CTB, X) -> int:
             beta[col_idx] = Vsize[col_idx]
             F[:, col_idx] ^= V[:, col_idx]
         neg_idx = ~idx
-        idx2 = alpha[I] > 0 
+
+        # Case 2: Retry with full exchange rule
+        idx2 = alpha[I] > 0
         col_idx = I[torch.where(neg_idx & idx2)]
         if col_idx.shape[0] > 0:
             alpha[col_idx] -= 1
             F[:, col_idx] ^= V[:, col_idx]
+
+        # Case 3: Apply backup rule
         col_idx = I[torch.where(neg_idx & (~idx2))]
         if col_idx.shape[0] > 0:
             coords = torch.nonzero(V[:, col_idx].T)
@@ -62,6 +68,10 @@ def nnls_bpp(CTC, CTB, X) -> int:
             Ii = I[indices == i]
             nF = Fvec.sum()
             nG = q - nF
+            if device_type != 'cpu':
+                Fvec = Fvec.cpu()
+                Ii = Ii.cpu()
+
             if nF > 0:
                 L = torch.cholesky(CTC[np.ix_(Fvec, Fvec)])
                 mesh_idx = np.ix_(Fvec, Ii)
@@ -86,5 +96,5 @@ def nnls_bpp(CTC, CTB, X) -> int:
         I = I[Vsize_I > 0]
 
         n_iter += 1
-    
+
     return n_iter if I.shape[0] == 0 else -1
