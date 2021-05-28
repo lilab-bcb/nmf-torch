@@ -265,6 +265,7 @@ class INMFOnline(INMFBase):
             H_err = self._update_H()
 
             self._cur_err = torch.sqrt(H_err + self._SSX)
+            print(f"pass {i+1}: loss={self._cur_err}.")
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
                 print(f"    Converged after {self.num_iters} pass(es).")

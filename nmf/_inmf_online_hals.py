@@ -15,12 +15,8 @@ class INMFOnlineHALS(INMFBase):
         device_type: str = 'cpu',
         max_pass: int = 10,
         chunk_size: int = 2000,
-        w_max_iter: int = 200,
-        v_max_iter: int = 50,
-        h_max_iter: int = 50,
-        w_tol: float = 1e-4,
-        v_tol: float = 1e-4,
-        h_tol: float = 1e-4,
+        hals_tol: float = 0.0008,
+        hals_max_iter: int = 200,
     ):
         super().__init__(
             n_components=n_components,
@@ -34,10 +30,9 @@ class INMFOnlineHALS(INMFBase):
 
         self._max_pass = max_pass
         self._chunk_size = chunk_size
-        self._w_max_iter = w_max_iter
-        self._v_max_iter = v_max_iter
-        self._h_max_iter = h_max_iter
-
+        self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
+        self._hals_tol = hals_tol
+        self._hals_max_iter = hals_max_iter
 
     def _h_err(self, h, hth, WVWVT, xWVT, VVT):
         # Calculate L2 Loss (no sum of squares of X) for block h in trace format.
@@ -75,7 +70,6 @@ class INMFOnlineHALS(INMFBase):
 
             # Block-wise update
             i = 0
-            VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
             A.fill_(0.0)
             B.fill_(0.0)
             while i < indices.shape[0]:
@@ -86,13 +80,15 @@ class INMFOnlineHALS(INMFBase):
                 # Update H
                 WV = self.W + self.V[k]
                 WVWVT = WV @ WV.T
-                hth = h.T @ h
+                VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
+                # hth = h.T @ h
                 xWVT = x @ WV.T
 
-                cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
+                # cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
-                for j in range(self._h_max_iter):
-                    prev_h_err = cur_h_err
+                for j in range(self._hals_max_iter):
+                    cur_max = 0.0
+                    # prev_h_err = cur_h_err
 
                     for l in range(self._n_components):
                         if self._lambda > 0.0:
@@ -106,26 +102,30 @@ class INMFOnlineHALS(INMFBase):
                             hvec[:] = 0.0 # divide zero error: set h_new to 0
                         else:
                             hvec = hvec.maximum(self._zero)
+                        cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
                         h[:, l] = hvec
 
-                    hth = h.T @ h
-                    cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
-
-                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    # hth = h.T @ h
+                    # cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
+                    # if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    #     break
+                    if j + 1 < self._hals_max_iter and cur_max / h.mean() < self._hals_tol:
                         break
-
+                print(f"Block {i} update H iterates {j+1} iterations.")
                 self.H[k][idx, :] = h
 
                 # Update sufficient statistics for batch k
+                hth = h.T @ h
                 A += hth
                 htx = h.T @ x
                 B += htx
 
                 # Update V
-                cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
+                # cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
 
-                for j in range(self._v_max_iter):
-                    prev_v_err = cur_v_err
+                for j in range(self._hals_max_iter):
+                    cur_max = 0.0
+                    # prev_v_err = cur_v_err
 
                     for l in range(self._n_components):
                         numer = B[l, :] - A[l, :] @ (self.W + (1.0 + self._lambda) * self.V[k])
@@ -135,15 +135,17 @@ class INMFOnlineHALS(INMFBase):
                             v_new[:] = 0.0 # divide zero error: set v_new to 0
                         else:
                             v_new = v_new.maximum(self._zero)
+                        cur_max = max(cur_max, torch.abs(self.V[k][l, :] - v_new).max())
                         self.V[k][l, :] = v_new
-
-                    WV = self.W + self.V[k]
-                    WVWVT = WV @ WV.T
-                    VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
-                    cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
-
-                    if self._is_converged(prev_v_err, cur_v_err, prev_v_err):
+                    if j + 1 < self._hals_max_iter and cur_max / self.V[k].mean() < self._hals_tol:
                         break
+                    # WV = self.W + self.V[k]
+                    # WVWVT = WV @ WV.T
+                    # VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
+                    # cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
+                    # if self._is_converged(prev_v_err, cur_v_err, prev_v_err):
+                    #     break
+                print(f"Block {i} update V iterates {j+1} iterations.")
 
                 # Update sufficient statistics for all batches
                 C += hth
@@ -152,9 +154,10 @@ class INMFOnlineHALS(INMFBase):
                 E_new = E + A @ self.V[k]
 
                 # Update W
-                cur_w_err = self._w_err(CW, E_new, D)
-                for j in range(self._w_max_iter):
-                    prev_w_err = cur_w_err
+                # cur_w_err = self._w_err(CW, E_new, D)
+                for j in range(self._hals_max_iter):
+                    cur_max = 0.0
+                    # prev_w_err = cur_w_err
 
                     for l in range(self._n_components):
                         w_new = self.W[l, :] + (D[l, :] - E_new[l, :] - CW[l, :]) / C[l, l]
@@ -162,12 +165,15 @@ class INMFOnlineHALS(INMFBase):
                             w_new[:] = 0.0 # divide zero error: set w_new to 0
                         else:
                             w_new = w_new.maximum(self._zero)
+                        cur_max = max(cur_max, torch.abs(self.W[l, :] - w_new).max())
                         self.W[l, :] = w_new
-                    CW = C @ self.W
-                    cur_w_err = self._w_err(CW, E_new, D)
-
-                    if self._is_converged(prev_w_err, cur_w_err, prev_w_err):
+                    # CW = C @ self.W
+                    # cur_w_err = self._w_err(CW, E_new, D)
+                    # if self._is_converged(prev_w_err, cur_w_err, prev_w_err):
+                    #     break
+                    if j + 1 < self._hals_max_iter and cur_max / self.W.mean() < self._hals_tol:
                         break
+                print(f"Block {i} update W iterates {j+1} iterations.")
 
                 i += self._chunk_size
             E = E_new
@@ -186,9 +192,6 @@ class INMFOnlineHALS(INMFBase):
 
             # Block-wise update
             i = 0
-            WV = self.W + self.V[k]
-            WVWVT = WV @ WV.T
-            VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
             A.fill_(0.0)
             B.fill_(0.0)
             while i < indices.shape[0]:
@@ -197,13 +200,17 @@ class INMFOnlineHALS(INMFBase):
                 h = self.H[k][idx, :]
 
                 # Update H
-                hth = h.T @ h
+                WV = self.W + self.V[k]
+                WVWVT = WV @ WV.T
+                VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
+                # hth = h.T @ h
                 xWVT = x @ WV.T
 
-                cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
+                # cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
-                for j in range(self._h_max_iter):
-                    prev_h_err = cur_h_err
+                for j in range(self._hals_max_iter):
+                    cur_max = 0.0
+                    # prev_h_err = cur_h_err
 
                     for l in range(self._n_components):
                         if self._lambda > 0.0:
@@ -217,26 +224,31 @@ class INMFOnlineHALS(INMFBase):
                             hvec[:] = 0.0 # divide zero error: set h_new to 0
                         else:
                             hvec = hvec.maximum(self._zero)
+                        cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
                         h[:, l] = hvec
 
-                    hth = h.T @ h
-                    cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
+                    # hth = h.T @ h
+                    # cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
+                    # if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    #     break
 
-                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    if j + 1 < self._hals_max_iter and cur_max / h.mean() < self._hals_tol:
                         break
-
+                print(f"Block {i} update H iterates {j+1} iterations.")
                 self.H[k][idx, :] = h
 
                 # Update sufficient statistics for batch k
+                hth = h.T @ h
                 A += hth
                 htx = h.T @ x
                 B += htx
 
                 # Update V
-                cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
+                # cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
 
-                for j in range(self._v_max_iter):
-                    prev_v_err = cur_v_err
+                for j in range(self._hals_max_iter):
+                    cur_max = 0.0
+                    # prev_v_err = cur_v_err
 
                     for l in range(self._n_components):
                         numer = B[l, :] - A[l, :] @ (self.W + (1.0 + self._lambda) * self.V[k])
@@ -246,16 +258,17 @@ class INMFOnlineHALS(INMFBase):
                             v_new[:] = 0.0 # divide zero error: set v_new to 0
                         else:
                             v_new = v_new.maximum(self._zero)
+                        cur_max = max(cur_max, torch.abs(self.V[k][l, :] - v_new).max())
                         self.V[k][l, :] = v_new
-
-                    WV = self.W + self.V[k]
-                    WVWVT = WV @ WV.T
-                    VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
-                    cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
-
-                    if self._is_converged(prev_v_err, cur_v_err, prev_v_err):
+                    if j + 1 < self._hals_max_iter and cur_max / self.V[k].mean() < self._hals_tol:
                         break
-
+                    # WV = self.W + self.V[k]
+                    # WVWVT = WV @ WV.T
+                    # VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
+                    # cur_v_err = self._v_err(A, B, WV, WVWVT, VVT)
+                    # if self._is_converged(prev_v_err, cur_v_err, prev_v_err):
+                    #     break
+                print(f"Block {i} update V iterates {j+1} iterations.")
                 i += self._chunk_size
 
 
@@ -273,13 +286,13 @@ class INMFOnlineHALS(INMFBase):
                 h = self.H[k][i:(i+self._chunk_size), :]
 
                 # Update H
-                hth = h.T @ h
                 xWVT = x @ WV.T
 
-                cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
+                # cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
 
-                for j in range(self._h_max_iter):
-                    prev_h_err = cur_h_err
+                for j in range(self._hals_max_iter):
+                    cur_max = 0.0
+                    # prev_h_err = cur_h_err
 
                     for l in range(self._n_components):
                         if self._lambda > 0.0:
@@ -293,15 +306,20 @@ class INMFOnlineHALS(INMFBase):
                             hvec[:] = 0.0 # divide zero error: set h_new to 0
                         else:
                             hvec = hvec.maximum(self._zero)
+                        cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
                         h[:, l] = hvec
 
-                    hth = h.T @ h
-                    cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
-
-                    if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    if j + 1 < self._hals_max_iter and cur_max / h.mean() < self._hals_tol:
                         break
+                    # hth = h.T @ h
+                    # cur_h_err = self._h_err(h, hth, WVWVT, xWVT, VVT)
+                    # if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                    #     break
+                print(f"Block {i} update H iterates {j+1} iterations.")
 
-                sum_h_err += cur_h_err
+                hth = h.T @ h
+                sum_h_err += self._h_err(h, hth, WVWVT, xWVT, VVT)
+                
                 i += self._chunk_size
 
         return sum_h_err
@@ -314,12 +332,16 @@ class INMFOnlineHALS(INMFBase):
         super().fit(mats)
 
         for i in range(self._max_pass):
+            print(f"Pass {i+1}:\nUpdate One Pass")
             self._update_one_pass()
+            print(f"Update H V")
             self._update_H_V()
+            print(f"Update H")
             H_err = self._update_H()
 
             self._cur_err = torch.sqrt(H_err + self._SSX)
-            if self._is_converged(self._prev_err, self._cur_err, self._init_err, self._tol):
+            print(f"loss={self._cur_err}.")
+            if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
                 print(f"    Converged after {self.num_iters} pass(es).")
                 return
