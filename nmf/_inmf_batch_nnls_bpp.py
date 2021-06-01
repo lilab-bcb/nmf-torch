@@ -1,7 +1,8 @@
 import torch
 
 from ._inmf_base import INMFBase
-from ._nnls_bpp import nnls_bpp
+from nmf.cylib.nnls_bpp_utils import nnls_bpp
+
 from typing import List, Union
 
 class INMFBatchNnlsBpp(INMFBase):
