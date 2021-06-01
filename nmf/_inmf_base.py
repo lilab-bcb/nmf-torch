@@ -46,46 +46,21 @@ class INMFBase:
         W /= self._n_batches
         self.W = W
 
-        self._HTH = []
-        self._WVWVT = []
-        self._XWVT = []
-        self._VVT = []
-        for k in range(self._n_batches):
-            # Cache for batch update
-            WV = self.W + V
-            self._HTH.append(self.H[k].T @ self.H[k])
-            WV = self.W + self.V[k]
-            self._WVWVT.append(WV @ WV.T)
-            self._XWVT.append(self.X[k] @ WV.T)
-            if self._lambda > 0.0:
-                self._VVT.append(self.V[k] @ self.V[k].T)
-        self._init_err = self._loss()
-        self._prev_err = self._init_err
-        self._cur_err = self._init_err
 
     def _trace(self, A, B):
         # return trace(A.T @ B) or trace(A @ B.T)
         return torch.dot(A.ravel(), B.ravel())
 
-    def _loss(self):
-        res = 0.0
-        for k in range(self._n_batches):
-            res += self._trace(self._HTH[k], self._WVWVT[k]) - 2.0 * self._trace(self.H[k], self._XWVT[k])
-            if self._lambda > 0.0:
-                res += self._lambda * self._trace(self._VVT[k], self._HTH[k])
-        res += self._SSX
-        return torch.sqrt(res)
+    def _loss(self): # not defined here
+        return None
 
     @property
     def reconstruction_err(self):
         return self._cur_err
 
     def _is_converged(self, prev_err, cur_err, init_err):
-        return torch.abs((prev_err - cur_err) / init_err) < self._tol
+        return prev_err <= cur_err or torch.abs((prev_err - cur_err) / init_err) < self._tol
 
-    def _update_matrix(self, mat, numer, denom):
-        mat *= (numer / denom)
-        mat[denom < self._epsilon] = 0.0
 
     def fit(
         self,
@@ -112,8 +87,16 @@ class INMFBase:
                 self.X.append(X.cuda())
 
         # Cache Sum of squares of Xs.
-        self._SSX = 0.0
+        self._SSX = torch.tensor(0.0, dtype = torch.double) # make sure _SSX is double to avoid summation errors
         for k in range(self._n_batches):
             self._SSX += self.X[k].norm(p=2)**2
 
         self._initialize_W_H_V()
+
+
+    def fit_transform(
+        self,
+        mats: List[torch.tensor],
+    ):
+        self.fit(mats)
+        return self.W

@@ -1,9 +1,9 @@
 import torch
 
-from ._inmf_base import INMFBase
+from ._inmf_batch_base import INMFBatchBase
 from typing import List, Union
 
-class INMFBatchHALS(INMFBase):
+class INMFBatchHALS(INMFBatchBase):
     def __init__(
         self,
         n_components: int,
@@ -136,11 +136,3 @@ class INMFBatchHALS(INMFBase):
 
         self.num_iters = self._max_iter
         print(f"    Not converged after {self.num_iters} iteration(s).")
-
-
-    def fit_transform(
-        self,
-        mats: List[torch.tensor],
-    ):
-        self.fit(mats)
-        return self.W
