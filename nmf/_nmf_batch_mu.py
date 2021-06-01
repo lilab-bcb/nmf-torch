@@ -1,40 +1,27 @@
 import torch
 
 from typing import Union
-from ._nmf_base import NMFBase
+from ._nmf_batch_base import NMFBatchBase
 
 
-class NMFBatch(NMFBase):
-    def __init__(
-        self,
-        n_components: int,
-        init,
-        beta_loss: float,
-        tol: float,
-        random_state: int,
-        alpha_W: float,
-        l1_ratio_W: float,
-        alpha_H: float,
-        l1_ratio_H: float,
-        fp_precision: Union[str, torch.dtype],
-        device_type: str,
-        max_iter: int,
-    ):
-        super().__init__(
-            n_components=n_components,
-            init=init,
-            beta_loss=beta_loss,
-            tol=tol,
-            random_state=random_state,
-            alpha_W=alpha_W,
-            l1_ratio_W=l1_ratio_W,
-            alpha_H=alpha_H,
-            l1_ratio_H=l1_ratio_H,
-            fp_precision=fp_precision,
-            device_type=device_type,
-        )
+class NMFBatchMU(NMFBatchBase):
+    def _add_regularization_terms(self, mat, numer_mat, denom_mat, l1_reg, l2_reg):
+        if l1_reg > 0:
+            if self._beta <= 1:
+                denom_mat += l1_reg
+            else:
+                numer_mat -= l1_reg
+                numer_mat[numer_mat < 0] = 0
 
-        self._max_iter = max_iter
+        if l2_reg > 0:
+            denom_mat += l2_reg * mat
+
+    def _update_matrix(self, mat, numer, denom):
+        mat *= (numer / denom)
+        mat[denom < self._epsilon] = 0.0
+
+    def _get_HW(self):
+        return self.H @ self.W
 
 
     def _update_H(self):
@@ -72,7 +59,6 @@ class NMFBatch(NMFBase):
             self._XWT = self.X @ self.W.T
 
 
-    @torch.no_grad()
     def fit(self, X):
         super().fit(X)
 
@@ -83,6 +69,7 @@ class NMFBatch(NMFBase):
 
             if (i + 1) % 10 == 0:
                 self._cur_err = self._loss()
+                print(f" niter={i+1}, loss={self._cur_err}.")
                 if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                     self.num_iters = i + 1
                     print(f"    Converged after {self.num_iters} iteration(s).")
@@ -92,8 +79,3 @@ class NMFBatch(NMFBase):
 
         self.num_iters = self._max_iter
         print(f"    Not converged after {self.num_iters} iteration(s).")
-
-
-    def fit_transform(self, X):
-        self.fit(X)
-        return self.H

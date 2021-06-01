@@ -1,10 +1,10 @@
 import torch
 
 from typing import Union
-from ._nmf_base import NMFBase
+from ._nmf_batch_base import NMFBatchBase
 
 
-class NMFBatchHALS(NMFBase):
+class NMFBatchHALS(NMFBatchBase):
     def __init__(
         self,
         n_components: int,
@@ -18,8 +18,8 @@ class NMFBatchHALS(NMFBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
-        max_iter: int,
-        hals_tol: float = 0.0008,
+        max_iter: int = 500,
+        hals_tol: float = 0.05,
         hals_max_iter: int = 200,
     ):
         assert beta_loss == 2.0 # only work for F norm for now
@@ -36,9 +36,9 @@ class NMFBatchHALS(NMFBase):
             l1_ratio_H=l1_ratio_H,
             fp_precision=fp_precision,
             device_type=device_type,
+            max_iter=max_iter,
         )
 
-        self._max_iter = max_iter
         self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
         self._hals_tol = hals_tol
         self._hals_max_iter = hals_max_iter
@@ -94,7 +94,6 @@ class NMFBatchHALS(NMFBase):
         self._XWT = self.X @ self.W.T
 
 
-    @torch.no_grad()
     def fit(self, X):
         super().fit(X)
 
@@ -115,8 +114,3 @@ class NMFBatchHALS(NMFBase):
 
         self.num_iters = self._max_iter
         print(f"    Not converged after {self.num_iters} iteration(s).")
-
-
-    def fit_transform(self, X):
-        self.fit(X)
-        return self.H

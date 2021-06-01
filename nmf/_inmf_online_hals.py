@@ -15,10 +15,10 @@ class INMFOnlineHALS(INMFOnlineBase):
         device_type: str = 'cpu',
         max_pass: int = 20,
         chunk_size: int = 5000,
-        hals_h_tol: float = 0.01,
-        hals_v_tol: float = 0.1,
-        hals_w_tol: float = 0.01,
-        hals_max_iter: int = 200,
+        chunk_max_iter: int = 200,
+        h_tol: float = 0.01,
+        v_tol: float = 0.1,
+        w_tol: float = 0.01,
     ):
         super().__init__(
             n_components=n_components,
@@ -28,15 +28,15 @@ class INMFOnlineHALS(INMFOnlineBase):
             random_state=random_state,
             fp_precision=fp_precision,
             device_type=device_type,
+            max_pass=max_pass,
+            chunk_size=chunk_size,
+            chunk_max_iter=chunk_max_iter,
+            h_tol=h_tol,
+            v_tol=v_tol,
+            w_tol=w_tol,
         )
 
-        self._max_pass = max_pass
-        self._chunk_size = chunk_size
         self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
-        self._hals_h_tol = hals_h_tol
-        self._hals_v_tol = hals_v_tol
-        self._hals_w_tol = hals_w_tol
-        self._hals_max_iter = hals_max_iter
 
 
     def _update_one_pass(self):
@@ -69,7 +69,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                 VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
                 xWVT = x @ WV.T
 
-                for j in range(self._hals_max_iter):
+                for j in range(self._chunk_max_iter):
                     cur_max = 0.0
 
                     for l in range(self._n_components):
@@ -87,7 +87,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                         cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
                         h[:, l] = hvec
 
-                    if j + 1 < self._hals_max_iter and cur_max / h.mean() < self._hals_h_tol:
+                    if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
                         break
 
                 # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")
@@ -100,7 +100,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                 B += htx
 
                 # Update V
-                for j in range(self._hals_max_iter):
+                for j in range(self._chunk_max_iter):
                     cur_max = 0.0
 
                     for l in range(self._n_components):
@@ -114,7 +114,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                         cur_max = max(cur_max, torch.abs(self.V[k][l, :] - v_new).max())
                         self.V[k][l, :] = v_new
 
-                    if j + 1 < self._hals_max_iter and cur_max / self.V[k].mean() < self._hals_v_tol:
+                    if j + 1 < self._chunk_max_iter and cur_max / self.V[k].mean() < self._v_tol:
                         break
 
                 # print(f"Batch {k} Block {i} update V iterates {j+1} iterations.")
@@ -125,7 +125,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                 E_new = E + A @ self.V[k]
 
                 # Update W
-                for j in range(self._hals_max_iter):
+                for j in range(self._chunk_max_iter):
                     cur_max = 0.0
 
                     for l in range(self._n_components):
@@ -137,7 +137,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                         cur_max = max(cur_max, torch.abs(self.W[l, :] - w_new).max())
                         self.W[l, :] = w_new
 
-                    if j + 1 < self._hals_max_iter and cur_max / self.W.mean() < self._hals_w_tol:
+                    if j + 1 < self._chunk_max_iter and cur_max / self.W.mean() < self._w_tol:
                         break
 
                 # print(f"Batch {k} Block {i} update W iterates {j+1} iterations.")
@@ -172,7 +172,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                 VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
                 xWVT = x @ WV.T
 
-                for j in range(self._hals_max_iter):
+                for j in range(self._chunk_max_iter):
                     cur_max = 0.0
 
                     for l in range(self._n_components):
@@ -190,7 +190,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                         cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
                         h[:, l] = hvec
 
-                    if j + 1 < self._hals_max_iter and cur_max / h.mean() < self._hals_h_tol:
+                    if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
                         break
 
                 # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")
@@ -203,7 +203,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                 B += htx
 
                 # Update V
-                for j in range(self._hals_max_iter):
+                for j in range(self._chunk_max_iter):
                     cur_max = 0.0
 
                     for l in range(self._n_components):
@@ -217,7 +217,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                         cur_max = max(cur_max, torch.abs(self.V[k][l, :] - v_new).max())
                         self.V[k][l, :] = v_new
 
-                    if j + 1 < self._hals_max_iter and cur_max / self.V[k].mean() < self._hals_v_tol:
+                    if j + 1 < self._chunk_max_iter and cur_max / self.V[k].mean() < self._v_tol:
                         break
 
                 # print(f"Batch {k} Block {i} update V iterates {j+1} iterations.")
@@ -226,7 +226,7 @@ class INMFOnlineHALS(INMFOnlineBase):
 
     def _update_H(self):
         """ Fix W and V, update H """
-        sum_h_err = torch.tensor(0.0, dtype = torch.double) # make sure sum_h_err is double to avoid summation errors
+        sum_h_err = torch.tensor(0.0, dtype=torch.double, device=self._device_type) # make sure sum_h_err is double to avoid summation errors
         for k in range(self._n_batches):
             WV = self.W + self.V[k]
             WVWVT = WV @ WV.T
@@ -239,7 +239,7 @@ class INMFOnlineHALS(INMFOnlineBase):
 
                 # Update H
                 xWVT = x @ WV.T
-                for j in range(self._hals_max_iter):
+                for j in range(self._chunk_max_iter):
                     cur_max = 0.0
 
                     for l in range(self._n_components):
@@ -257,7 +257,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                         cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
                         h[:, l] = hvec
 
-                    if j + 1 < self._hals_max_iter and cur_max / h.mean() < self._hals_h_tol:
+                    if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
                         break
 
                 # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")

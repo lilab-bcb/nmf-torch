@@ -4,30 +4,6 @@ from ._inmf_batch_base import INMFBatchBase
 from typing import List, Union
 
 class INMFBatchMU(INMFBatchBase):
-    def __init__(
-        self,
-        n_components: int,
-        lam: float = 5.,
-        init: str = 'random',
-        tol: float = 1e-4,
-        random_state: int = 0,
-        fp_precision: Union[str, torch.dtype] = 'float',
-        device_type: str = 'cpu',
-        max_iter: int = 200,
-    ):
-        super().__init__(
-            n_components=n_components,
-            lam=lam,
-            init=init,
-            tol=tol,
-            random_state=random_state,
-            fp_precision=fp_precision,
-            device_type=device_type,
-        )
-
-        self._max_iter = max_iter
-
-
     def _update_matrix(self, mat, numer, denom):
         mat *= (numer / denom)
         mat[denom < self._epsilon] = 0.0

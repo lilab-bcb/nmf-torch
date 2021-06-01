@@ -1,10 +1,10 @@
 import torch
 
 from typing import Union
-from ._nmf_base import NMFBase
+from ._nmf_online_base import NMFOnlineBase
 
 
-class NMFOnlineHALS(NMFBase):
+class NMFOnlineHALS(NMFOnlineBase):
     def __init__(
         self,
         n_components: int,
@@ -18,10 +18,11 @@ class NMFOnlineHALS(NMFBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
-        max_pass: int,
-        chunk_size: int,
-        w_max_iter: int,
-        h_max_iter: int,
+        max_pass: int = 20,
+        chunk_size: int = 5000,
+        chunk_max_iter: int = 200,
+        h_tol: float = 0.05,
+        w_tol: float = 0.05,
     ):
         super().__init__(
             n_components=n_components,
@@ -35,34 +36,14 @@ class NMFOnlineHALS(NMFBase):
             l1_ratio_H=l1_ratio_H,
             fp_precision=fp_precision,
             device_type=device_type,
+            max_pass=max_pass,
+            chunk_size=chunk_size,
+            chunk_max_iter=chunk_max_iter,
+            h_tol=h_tol,
+            w_tol=w_tol,
         )
 
-        self._max_pass = max_pass
-        self._chunk_size = chunk_size
-        self._w_max_iter = w_max_iter
-        self._h_max_iter = h_max_iter
         self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
-
-
-    def _h_err(self, h, hth, WWT, xWT):
-        # Forbenious-norm^2 in trace format (No X)
-        res = self._trace(WWT, hth) / 2.0 - self._trace(h, xWT)
-        # Add regularization terms if needed
-        if self._l1_reg_H > 0.0:
-            res += self._l1_reg_H * h.norm(p=1)
-        if self._l2_reg_H > 0.0:
-            res += self._l2_reg_H * torch.trace(hth) / 2.0
-        return res
-
-
-    def _W_err(self, A, B, l1_reg_W, l2_reg_W, WWT):
-        res = self._trace(WWT, A) / 2.0 - self._trace(B, self.W)
-        # Add regularization terms if needed
-        if l1_reg_W > 0.0:
-            res += l1_reg_W * self.W.norm(p=1)
-        if l2_reg_W > 0.0:
-            res += l2_reg_W * torch.trace(WWT) / 2.0
-        return res
 
 
     def _update_one_pass(self, l1_reg_W, l2_reg_W):
@@ -72,7 +53,6 @@ class NMFOnlineHALS(NMFBase):
 
         i = 0
         num_processed = 0
-        WWT = self.W @ self.W.T
         while i < indices.shape[0]:
             idx = indices[i:(i+self._chunk_size)]
             cur_chunksize = idx.shape[0]
@@ -80,13 +60,11 @@ class NMFOnlineHALS(NMFBase):
             h = self.H[idx, :]
 
             # Online update H.
-            hth = h.T @ h
+            WWT = self.W @ self.W.T
             xWT = x @ self.W.T
 
-            cur_h_err = self._h_err(h, hth, WWT, xWT)
-
-            for j in range(self._h_max_iter):
-                prev_h_err = cur_h_err
+            for j in range(self._chunk_max_iter):
+                cur_max = 0.0
 
                 for k in range(self.k):
                     numer = xWT[:, k] - h @ WWT[:, k]
@@ -101,21 +79,20 @@ class NMFOnlineHALS(NMFBase):
                         hvec[:] = 0.0 # divide zero error: set hvec to 0
                     else:
                         hvec = hvec.maximum(self._zero)
+                    cur_max = max(cur_max, torch.abs(h[:, k] - hvec).max())
                     h[:, k] = hvec
+                
+                if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
+                            break
 
-                hth = h.T @ h
-                cur_h_err = self._h_err(h, hth, WWT, xWT)
-
-                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
-                    break
-
+            # print(f"Block {i} update H iterates {j+1} iterations.")
             self.H[idx, :] = h
 
             # Update sufficient statistics A and B.
             num_after = num_processed + cur_chunksize
 
             A *= num_processed
-            A += hth
+            A += h.T @ h
             A /= num_after
 
             B *= num_processed
@@ -125,10 +102,8 @@ class NMFOnlineHALS(NMFBase):
             num_processed = num_after
 
             # Online update W.
-            cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, WWT)
-
-            for j in range(self._w_max_iter):
-                prev_W_err = cur_W_err
+            for j in range(self._chunk_max_iter):
+                cur_max = 0.0
 
                 for k in range(self.k):
                     numer = B[k, :] - A[k, :] @ self.W
@@ -143,33 +118,28 @@ class NMFOnlineHALS(NMFBase):
                         w_new[:] = 0.0 # divide zero error: set w_new to 0
                     else:
                         w_new = w_new.maximum(self._zero)
+                    cur_max = max(cur_max, torch.abs(self.W[k, :] - w_new).max())
                     self.W[k, :] = w_new
-
-                WWT = self.W @ self.W.T
-                cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, WWT)
-
-                if self._is_converged(prev_W_err, cur_W_err, prev_W_err):
+                
+                if j + 1 < self._chunk_max_iter and cur_max / self.W.mean() < self._w_tol:
                     break
 
+            # print(f"Block {i} update W iterates {j+1} iterations.")
             i += self._chunk_size
 
-        return WWT
 
-
-    def _update_H(self, WWT):
+    def _update_H(self):
         i = 0
-        sum_h_err = 0.0
+        WWT = self.W @ self.W.T
+
+        sum_h_err = torch.tensor(0.0, dtype=torch.double, device=self._device_type) # make sure sum_h_err is double to avoid summation errors
         while i < self.H.shape[0]:
             x = self.X[i:(i+self._chunk_size), :]
             h = self.H[i:(i+self._chunk_size), :]
 
-            hth = h.T @ h
             xWT = x @ self.W.T
-
-            cur_h_err = self._h_err(h, hth, WWT, xWT)
-
-            for j in range(self._h_max_iter):
-                prev_h_err = cur_h_err
+            for j in range(self._chunk_max_iter):
+                cur_max = 0.0
 
                 for k in range(self.k):
                     numer = xWT[:, k] - h @ WWT[:, k]
@@ -184,24 +154,25 @@ class NMFOnlineHALS(NMFBase):
                         hvec[:] = 0.0 # divide zero error: set hvec to 0
                     else:
                         hvec = hvec.maximum(self._zero)
+                    cur_max = max(cur_max, torch.abs(h[:, k] - hvec).max())
                     h[:, k] = hvec
 
-                hth = h.T @ h
-                cur_h_err = self._h_err(h, hth, WWT, xWT)
-
-                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
+                if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
                     break
 
-            sum_h_err += cur_h_err
+            # print(f"Block {i} update H iterates {j+1} iterations.")
+
+            hth = h.T @ h
+            sum_h_err += self._h_err(h, hth, WWT, xWT)
+
             i += self._chunk_size
 
-        return sum_h_err
+        return torch.sqrt(2.0 * (sum_h_err + self._X_SS_half + self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)))
 
 
-    @torch.no_grad()
     def fit(self, X):
         super().fit(X)
-        assert self._beta==2, "Cannot perform online update when beta not equal to 2!"
+        assert self._beta==2, "Cannot perform online update when beta is not equal to 2!"
 
         # Online update.
         self._chunk_size = min(self.X.shape[0], self._chunk_size)
@@ -209,22 +180,23 @@ class NMFOnlineHALS(NMFBase):
         l1_reg_W = self._l1_reg_W / self.X.shape[0]
         l2_reg_W = self._l2_reg_W / self.X.shape[0]
 
+        self.num_iters = -1
         for i in range(self._max_pass):
-            WWT = self._update_one_pass(l1_reg_W, l2_reg_W)
-            H_err = self._update_H(WWT) # Update H again at the end of each pass.
+            self._update_one_pass(l1_reg_W, l2_reg_W)
+            self._cur_err = self._loss()
+            print(f"Pass {i+1}, loss={self._cur_err}.")
 
-            self._cur_err = torch.sqrt(2 * (H_err + self._X_SS_half + self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)))
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
                 print(f"    Converged after {self.num_iters} pass(es).")
-                return
+                break
 
             self._prev_err = self._cur_err
 
-        self.num_iters = self._max_pass
-        print(f"    Not converged after {self._max_pass} pass(es).")
+        if self.num_iters < 0:
+            self.num_iters = self._max_pass
+            print(f"    Not converged after {self._max_pass} pass(es).")
 
-
-    def fit_transform(self, X):
-        self.fit(X)
-        return self.H
+        print(f"Update H")
+        self._cur_err = self._update_H()
+        print(f"Final loss={self._cur_err}.")

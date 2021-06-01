@@ -4,6 +4,40 @@ from ._inmf_base import INMFBase
 from typing import List, Union
 
 class INMFOnlineBase(INMFBase):
+    def __init__(
+        self,
+        n_components: int,
+        lam: float = 5.,
+        init: str = 'random',
+        tol: float = 1e-4,
+        random_state: int = 0,
+        fp_precision: Union[str, torch.dtype] = 'float',
+        device_type: str = 'cpu',
+        max_pass: int = 20,
+        chunk_size: int = 5000,
+        chunk_max_iter: int = 200,
+        h_tol: float = 0.01,
+        v_tol: float = 0.1,
+        w_tol: float = 0.01,
+    ):
+        super().__init__(
+            n_components=n_components,
+            lam=lam,
+            init=init,
+            tol=tol,
+            random_state=random_state,
+            fp_precision=fp_precision,
+            device_type=device_type,
+        )
+
+        self._max_pass = max_pass
+        self._chunk_size = chunk_size
+        self._chunk_max_iter = chunk_max_iter
+        self._h_tol = h_tol
+        self._v_tol = v_tol
+        self._w_tol = w_tol
+
+
     def _h_err(self, h, hth, WVWVT, xWVT, VVT):
         # Calculate L2 Loss (no sum of squares of X) for block h in trace format.
         res = self._trace(WVWVT + self._lambda * VVT, hth) if self._lambda > 0.0 else self._trace(WVWVT, hth)
@@ -13,7 +47,7 @@ class INMFOnlineBase(INMFBase):
 
     def _loss(self):
         """ calculate loss online by passing through all data"""
-        sum_h_err = torch.tensor(0.0, dtype = torch.double) # make sure sum_h_err is double to avoid summation errors
+        sum_h_err = torch.tensor(0.0, dtype=torch.double, device=self._device_type) # make sure sum_h_err is double to avoid summation errors
         for k in range(self._n_batches):
             WV = self.W + self.V[k]
             WVWVT = WV @ WV.T
@@ -39,4 +73,3 @@ class INMFOnlineBase(INMFBase):
 
         self._init_err = self._loss()
         self._prev_err = self._init_err
-        self._cur_err = self._init_err

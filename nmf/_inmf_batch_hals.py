@@ -25,9 +25,9 @@ class INMFBatchHALS(INMFBatchBase):
             random_state=random_state,
             fp_precision=fp_precision,
             device_type=device_type,
+            max_iter=max_iter,
         )
-
-        self._max_iter = max_iter
+        
         self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
         self._hals_tol = hals_tol
         self._hals_max_iter = hals_max_iter

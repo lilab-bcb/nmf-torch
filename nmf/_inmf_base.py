@@ -30,7 +30,7 @@ class INMFBase:
         self._device_type = device_type
 
 
-    def _initialize_W_H_V(self, eps=1e-6):
+    def _initialize_W_H_V(self):
         W = torch.zeros((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
         self.H = []
         self.V = []
@@ -87,7 +87,7 @@ class INMFBase:
                 self.X.append(X.cuda())
 
         # Cache Sum of squares of Xs.
-        self._SSX = torch.tensor(0.0, dtype = torch.double) # make sure _SSX is double to avoid summation errors
+        self._SSX = torch.tensor(0.0, dtype=torch.double, device=self._device_type) # make sure _SSX is double to avoid summation errors
         for k in range(self._n_batches):
             self._SSX += self.X[k].norm(p=2)**2
 

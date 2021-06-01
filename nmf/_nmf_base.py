@@ -50,50 +50,8 @@ class NMFBase:
         self._random_state = random_state
 
 
-    @property
-    def reconstruction_err(self):
-        return self._cur_err
-
-
-    def _get_HW(self):
-        return self.H @ self.W
-
-
     def _get_regularization_loss(self, mat, l1_reg, l2_reg):
-        res = 0.
-        if l1_reg > 0:
-            res += l1_reg * mat.norm(p=1)
-        if l2_reg > 0:
-            res += l2_reg * mat.norm(p=2)**2 / 2
-        return res
-
-
-    def _is_converged(self, prev_err, cur_err, init_err):
-        if torch.abs((prev_err - cur_err) / init_err) < self._tol:
-            return True
-        else:
-            return False
-
-
-    def _add_regularization_terms(self, mat, numer_mat, denom_mat, l1_reg, l2_reg):
-        if l1_reg > 0:
-            if self._beta <= 1:
-                denom_mat += l1_reg
-            else:
-                numer_mat -= l1_reg
-                numer_mat[numer_mat < 0] = 0
-
-        if l2_reg > 0:
-            denom_mat += l2_reg * mat
-
-
-    def _update_matrix(self, mat, numer, denom):
-        mat *= (numer / denom)
-        mat[denom < self._epsilon] = 0.0
-
-
-    def _get_regularization_loss(self, mat, l1_reg, l2_reg):
-        res = 0.
+        res = 0.0
         if l1_reg > 0:
             res += l1_reg * mat.norm(p=1)
         if l2_reg > 0:
@@ -106,39 +64,17 @@ class NMFBase:
         return torch.dot(A.ravel(), B.ravel())
 
 
-    def _loss(self, square_root=True):
-        if self._beta == 2:
-            res = self._trace(self._WWT, self._HTH) / 2.0 - self._trace(self.H, self._XWT) + self._X_SS_half
-        elif self._beta == 0 or self._beta == 1:
-            Y = self._get_HW()
-            X_flat = self.X.flatten()
-            Y_flat = Y.flatten()
+    def _loss(self): # not defined here
+        return None
 
-            idx = X_flat > self._epsilon
-            X_flat = X_flat[idx]
-            Y_flat = Y_flat[idx]
 
-            # Avoid division by zero
-            Y_flat[Y_flat == 0] = self._epsilon
+    @property
+    def reconstruction_err(self):
+        return self._cur_err
 
-            x_div_y = X_flat / Y_flat
-            if self._beta == 0:
-                res = x_div_y.sum() - x_div_y.log().sum() - self.X.shape.numel()
-            else:
-                res = X_flat @ x_div_y.log() - X_flat.sum() + Y.sum()
-        else:
-            Y = self._get_HW()
-            res = torch.sum(self.X.pow(self._beta) - self._beta * self.X * Y.pow(self._beta - 1) + (self._beta - 1) * Y.pow(self._beta))
-            res /= (self._beta * (self._beta - 1))
 
-        # Add regularization terms.
-        res += self._get_regularization_loss(self.H, self._l1_reg_H, self._l2_reg_H)
-        res += self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)
-
-        if square_root:
-            return torch.sqrt(2 * res)
-        else:
-            return res
+    def _is_converged(self, prev_err, cur_err, init_err):
+        return prev_err <= cur_err or torch.abs((prev_err - cur_err) / init_err) < self._tol
 
 
     def _initialize_H_W(self, eps=1e-6):
@@ -195,14 +131,6 @@ class NMFBase:
         self.H = H
         self.W = W
 
-        if self._beta == 2:
-            self._WWT = self.W @ self.W.T
-            self._HTH = self.H.T @ self.H
-            self._XWT = self.X @ self.W.T
-
-        self._init_err = self._loss()
-        self._prev_err = self._init_err.clone()
-
 
     def fit(self, X):
         torch.manual_seed(self._random_state)
@@ -220,5 +148,10 @@ class NMFBase:
 
         self.X = X
         if self._beta == 2:  # Cache sum of X^2 divided by 2 for speed-up of calculating beta loss.
-            self._X_SS_half = X.norm(p=2)**2 / 2
+            self._X_SS_half = (X.norm(p=2)**2 / 2).double()
         self._initialize_H_W()
+
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.H
