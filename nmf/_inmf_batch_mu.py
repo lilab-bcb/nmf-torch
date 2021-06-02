@@ -1,31 +1,12 @@
 import torch
 
-from ._inmf_base import INMFBase
+from ._inmf_batch_base import INMFBatchBase
 from typing import List, Union
 
-class INMFBatch(INMFBase):
-    def __init__(
-        self,
-        n_components: int,
-        lam: float = 5.,
-        init: str = 'random',
-        tol: float = 1e-4,
-        random_state: int = 0,
-        fp_precision: Union[str, torch.dtype] = 'float',
-        device_type: str = 'cpu',
-        max_iter: int = 200,
-    ):
-        super().__init__(
-            n_components=n_components,
-            lam=lam,
-            init=init,
-            tol=tol,
-            random_state=random_state,
-            fp_precision=fp_precision,
-            device_type=device_type,
-        )
-
-        self._max_iter = max_iter
+class INMFBatchMU(INMFBatchBase):
+    def _update_matrix(self, mat, numer, denom):
+        mat *= (numer / denom)
+        mat[denom < self._epsilon] = 0.0
 
 
     def _update_H_V_W(self):
@@ -82,11 +63,3 @@ class INMFBatch(INMFBase):
 
         self.num_iters = self._max_iter
         print(f"    Not converged after {self.num_iters} iteration(s).")
-
-
-    def fit_transform(
-        self,
-        mats: List[torch.tensor],
-    ):
-        self.fit(mats)
-        return self.W

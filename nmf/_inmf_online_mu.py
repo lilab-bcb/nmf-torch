@@ -3,40 +3,13 @@ import torch
 from ._inmf_online_base import INMFOnlineBase
 from typing import List, Union
 
-class INMFOnlineHALS(INMFOnlineBase):
-    def __init__(
-        self,
-        n_components: int,
-        lam: float = 5.,
-        init: str = 'random',
-        tol: float = 1e-4,
-        random_state: int = 0,
-        fp_precision: Union[str, torch.dtype] = 'float',
-        device_type: str = 'cpu',
-        max_pass: int = 20,
-        chunk_size: int = 5000,
-        chunk_max_iter: int = 200,
-        h_tol: float = 0.01,
-        v_tol: float = 0.1,
-        w_tol: float = 0.01,
-    ):
-        super().__init__(
-            n_components=n_components,
-            lam=lam,
-            init=init,
-            tol=tol,
-            random_state=random_state,
-            fp_precision=fp_precision,
-            device_type=device_type,
-            max_pass=max_pass,
-            chunk_size=chunk_size,
-            chunk_max_iter=chunk_max_iter,
-            h_tol=h_tol,
-            v_tol=v_tol,
-            w_tol=w_tol,
-        )
-
-        self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
+class INMFOnlineMU(INMFOnlineBase):
+    def _update_matrix(self, mat, numer, denom):
+        rates = numer / denom
+        rates[denom < self._epsilon] = 0.0
+        cur_max = (torch.abs(1.0 - rates) * mat).max()
+        mat *= rates
+        return cur_max
 
 
     def _update_one_pass(self):
@@ -69,27 +42,12 @@ class INMFOnlineHALS(INMFOnlineBase):
                 VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
                 xWVT = x @ WV.T
 
+                h_factor_numer = xWVT
                 for j in range(self._chunk_max_iter):
-                    cur_max = 0.0
-
-                    for l in range(self._n_components):
-                        if self._lambda > 0.0:
-                            numer = xWVT[:, l] - h @ (WVWVT[:, l] + self._lambda * VVT[:, l])
-                            denom = WVWVT[l, l] + self._lambda * VVT[l, l]
-                        else:
-                            numer = xWVT[:, l] - h @ WVWVT[:, l]
-                            denom = WVWVT[l, l]    
-                        hvec = h[:, l] + numer / denom
-                        if torch.isnan(hvec).sum() > 0:
-                            hvec[:] = 0.0 # divide zero error: set h_new to 0
-                        else:
-                            hvec = hvec.maximum(self._zero)
-                        cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
-                        h[:, l] = hvec
-
+                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
+                    cur_max = self._update_matrix(h, h_factor_numer, h_factor_denom)
                     if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
                         break
-
                 # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")
                 self.H[k][idx, :] = h
 
@@ -100,23 +58,13 @@ class INMFOnlineHALS(INMFOnlineBase):
                 B += htx
 
                 # Update V
+                V_factor_numer = B
                 for j in range(self._chunk_max_iter):
-                    cur_max = 0.0
-
-                    for l in range(self._n_components):
-                        numer = B[l, :] - A[l, :] @ (self.W + (1.0 + self._lambda) * self.V[k])
-                        denom = (1.0 + self._lambda) * A[l, l]
-                        v_new = self.V[k][l, :] + numer / denom
-                        if torch.isnan(v_new).sum() > 0:
-                            v_new[:] = 0.0 # divide zero error: set v_new to 0
-                        else:
-                            v_new = v_new.maximum(self._zero)
-                        cur_max = max(cur_max, torch.abs(self.V[k][l, :] - v_new).max())
-                        self.V[k][l, :] = v_new
-
+                    V_factor_denom = A @ (WV + self._lambda * self.V[k])
+                    cur_max = self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
+                    WV = self.W + self.V[k]
                     if j + 1 < self._chunk_max_iter and cur_max / self.V[k].mean() < self._v_tol:
                         break
-
                 # print(f"Batch {k} Block {i} update V iterates {j+1} iterations.")
 
                 # Update sufficient statistics for all batches
@@ -125,23 +73,13 @@ class INMFOnlineHALS(INMFOnlineBase):
                 E_new = E + A @ self.V[k]
 
                 # Update W
+                W_factor_numer = D
                 for j in range(self._chunk_max_iter):
-                    cur_max = 0.0
-
-                    for l in range(self._n_components):
-                        w_new = self.W[l, :] + (D[l, :] - E_new[l, :] - C[l, :] @ self.W) / C[l, l]
-                        if torch.isnan(w_new).sum() > 0:
-                            w_new[:] = 0.0 # divide zero error: set w_new to 0
-                        else:
-                            w_new = w_new.maximum(self._zero)
-                        cur_max = max(cur_max, torch.abs(self.W[l, :] - w_new).max())
-                        self.W[l, :] = w_new
-
+                    W_factor_denom = C @ self.W + E_new
+                    cur_max = self._update_matrix(self.W, W_factor_numer, W_factor_denom)
                     if j + 1 < self._chunk_max_iter and cur_max / self.W.mean() < self._w_tol:
                         break
-
                 # print(f"Batch {k} Block {i} update W iterates {j+1} iterations.")
-
                 i += self._chunk_size
             E = E_new
 
@@ -172,27 +110,12 @@ class INMFOnlineHALS(INMFOnlineBase):
                 VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
                 xWVT = x @ WV.T
 
+                h_factor_numer = xWVT
                 for j in range(self._chunk_max_iter):
-                    cur_max = 0.0
-
-                    for l in range(self._n_components):
-                        if self._lambda > 0.0:
-                            numer = xWVT[:, l] - h @ (WVWVT[:, l] + self._lambda * VVT[:, l])
-                            denom = WVWVT[l, l] + self._lambda * VVT[l, l]
-                        else:
-                            numer = xWVT[:, l] - h @ WVWVT[:, l]
-                            denom = WVWVT[l, l]    
-                        hvec = h[:, l] + numer / denom
-                        if torch.isnan(hvec).sum() > 0:
-                            hvec[:] = 0.0 # divide zero error: set h_new to 0
-                        else:
-                            hvec = hvec.maximum(self._zero)
-                        cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
-                        h[:, l] = hvec
-
+                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
+                    cur_max = self._update_matrix(h, h_factor_numer, h_factor_denom)
                     if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
                         break
-
                 # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")
                 self.H[k][idx, :] = h
 
@@ -203,23 +126,13 @@ class INMFOnlineHALS(INMFOnlineBase):
                 B += htx
 
                 # Update V
+                V_factor_numer = B
                 for j in range(self._chunk_max_iter):
-                    cur_max = 0.0
-
-                    for l in range(self._n_components):
-                        numer = B[l, :] - A[l, :] @ (self.W + (1.0 + self._lambda) * self.V[k])
-                        denom = (1.0 + self._lambda) * A[l, l]
-                        v_new = self.V[k][l, :] + numer / denom
-                        if torch.isnan(v_new).sum() > 0:
-                            v_new[:] = 0.0 # divide zero error: set v_new to 0
-                        else:
-                            v_new = v_new.maximum(self._zero)
-                        cur_max = max(cur_max, torch.abs(self.V[k][l, :] - v_new).max())
-                        self.V[k][l, :] = v_new
-
+                    V_factor_denom = A @ (WV + self._lambda * self.V[k])
+                    cur_max = self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
+                    WV = self.W + self.V[k]
                     if j + 1 < self._chunk_max_iter and cur_max / self.V[k].mean() < self._v_tol:
                         break
-
                 # print(f"Batch {k} Block {i} update V iterates {j+1} iterations.")
                 i += self._chunk_size
 
@@ -239,32 +152,16 @@ class INMFOnlineHALS(INMFOnlineBase):
 
                 # Update H
                 xWVT = x @ WV.T
+                h_factor_numer = xWVT
                 for j in range(self._chunk_max_iter):
-                    cur_max = 0.0
-
-                    for l in range(self._n_components):
-                        if self._lambda > 0.0:
-                            numer = xWVT[:, l] - h @ (WVWVT[:, l] + self._lambda * VVT[:, l])
-                            denom = WVWVT[l, l] + self._lambda * VVT[l, l]
-                        else:
-                            numer = xWVT[:, l] - h @ WVWVT[:, l]
-                            denom = WVWVT[l, l]    
-                        hvec = h[:, l] + numer / denom
-                        if torch.isnan(hvec).sum() > 0:
-                            hvec[:] = 0.0 # divide zero error: set h_new to 0
-                        else:
-                            hvec = hvec.maximum(self._zero)
-                        cur_max = max(cur_max, torch.abs(h[:, l] - hvec).max())
-                        h[:, l] = hvec
-
+                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
+                    cur_max = self._update_matrix(h, h_factor_numer, h_factor_denom)
                     if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
-                        break
-
+                            break
                 # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")
 
                 hth = h.T @ h
                 sum_h_err += self._h_err(h, hth, WVWVT, xWVT, VVT)
-                
                 i += self._chunk_size
 
         return torch.sqrt(sum_h_err + self._SSX)
@@ -280,7 +177,7 @@ class INMFOnlineHALS(INMFOnlineBase):
         for i in range(self._max_pass):
             self._update_one_pass()
             self._cur_err = self._loss()
-            print(f"Pass {i+1}, loss={self._cur_err}.")
+            print(f"pass {i+1}: loss={self._cur_err}.")
 
             if self._is_converged(self._prev_err, self._cur_err, self._init_err):
                 self.num_iters = i + 1
@@ -293,8 +190,6 @@ class INMFOnlineHALS(INMFOnlineBase):
             self.num_iters = self._max_pass
             print(f"    Not converged after {self._max_pass} pass(es).")
 
-        # print(f"Update H V")
         self._update_H_V()
-        # print(f"Update H")
         self._cur_err = self._update_H()
         print(f"Final loss={self._cur_err}.")
