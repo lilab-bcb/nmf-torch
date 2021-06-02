@@ -12,7 +12,7 @@ ctypedef unsigned char uint8
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cpdef nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type):
+cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type):
     # CTC = C.T @ C
     # CTB = C.T @ B
 
@@ -87,9 +87,10 @@ cpdef nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type)
             else:
                 # Case 3: Apply backup rule
                 row_idx = 0
-                for i in reversed(range(q)):
+                for i in range(q-1, -1, -1):
                     if V[i, col_idx] > 0:
                         row_idx = i
+                        break
                 F[row_idx, col_idx] ^= True
 
         # Get unique F columns with indices mapping back to F.
@@ -131,11 +132,12 @@ cpdef nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type)
                 CTC_L_M = 0
                 for i in range(q):
                     CTC_L_N = 0
-                    for j in range(q):
-                        if Fvec[i] and Fvec[j]:
-                            CTC_L[CTC_L_M, CTC_L_N] = CTC[i, j]
-                            CTC_L_N += 1
-                    CTC_L_M += 1
+                    if Fvec[i]:
+                        for j in range(q):
+                            if Fvec[j]:
+                                CTC_L[CTC_L_M, CTC_L_N] = CTC[i, j]
+                                CTC_L_N += 1
+                        CTC_L_M += 1
                 assert CTC_L_M == CTC_L_N, "CTC submatrix is not square!"
 
                 L = torch.cholesky(torch.tensor(CTC_L[0:CTC_L_M, 0:CTC_L_N], device=device_type))
@@ -145,9 +147,9 @@ cpdef nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type)
                     CTB_L_N = 0
                     if Fvec[i]:
                         for j in range(size_Ii):
-                            CTB_L[CTC_L_M, CTC_L_N] = CTB[i, Ii[j]]
-                            CTC_L_N += 1
-                    CTC_L_M += 1
+                            CTB_L[CTB_L_M, CTB_L_N] = CTB[i, Ii[j]]
+                            CTB_L_N += 1
+                        CTB_L_M += 1
 
                 x = torch.cholesky_solve(torch.tensor(CTB_L[0:CTB_L_M, 0:CTB_L_N], device=device_type), L)
                 x = x.numpy() if device_type == 'cpu' else x.cpu().numpy()
