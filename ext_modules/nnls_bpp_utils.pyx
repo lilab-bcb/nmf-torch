@@ -1,4 +1,5 @@
 # cython: language_level=3
+# distutils: language = c++
 
 ### NNLS Block principal pivoting: Kim and Park et al 2011.
 
@@ -7,22 +8,27 @@ import torch
 
 cimport cython
 
+from libcpp.unordered_map cimport unordered_map
+from libcpp.vector cimport vector
+from libcpp.string cimport string
+from cython.operator import dereference, postincrement
+
 ctypedef unsigned char uint8
 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type):
-    # CTC = C.T @ C
-    # CTB = C.T @ B
-
-    # dtype = C.dtype
-    # X = torch.zeros((q, r), dtype=dtype)
+    # CTC = C.T @ C, CTB = C.T @ B, X.shape = (q, r)
 
     cdef Py_ssize_t i, j, k, l, m, uniq_idx
     cdef int q = CTB.shape[0]
     cdef int r = CTB.shape[1]
     cdef int max_iter = 5 * q
+
+    CTC_L = torch.zeros((q, q), dtype=torch.float, device=device_type)
+    CTB_L = torch.zeros((q, r), dtype=torch.float, device=device_type)
+    cdef Py_ssize_t CTC_L_M, CTC_L_N, CTB_L_M, CTB_L_N
 
     ### Initialization, setting G = 1-q
     for i in range(q):
@@ -57,17 +63,18 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
             I[size_I] = i
             size_I += 1
 
-    cdef uint8[:, :] uniq_F = np.zeros((q, r), dtype=np.bool_)
+    cdef unordered_map[string, vector[int]] uniq_F = unordered_map[string, vector[int]]()
+    cdef unordered_map[string, vector[int]].iterator it
+    cdef string Fvec_str
+    #cdef uint8[:, :] uniq_F = np.zeros((q, r), dtype=np.bool_)
     cdef int[:] indices = np.zeros((r,), dtype=np.int32)
     cdef uint8[:] Fvec = np.zeros((q,), dtype=np.bool_)
     cdef int[:] Ii = np.zeros((r,), dtype=np.int32)
-    cdef float[:, :] CTC_L = np.zeros((q, q), dtype=np.float32)
-    cdef float[:, :] CTB_L = np.zeros((q, r), dtype=np.float32)
     cdef uint8[:, :] V_I = np.zeros((q, r), dtype=np.bool_)
     cdef int[:] Vsize_I = np.zeros((r,), dtype=np.int32)
     cdef float[:, :] y = np.zeros((q, r), dtype=np.float32)
 
-    cdef int col_idx, row_idx, nF, nG, size_uniq_F, uniq_flag, size_Ii, CTC_L_M, CTC_L_N, CTB_L_M, CTB_L_N
+    cdef int col_idx, row_idx, nF, nG, size_uniq_F, uniq_flag, size_Ii
     cdef int n_iter = 0
     while size_I > 0 and n_iter < max_iter:
         # Split indices in I into 3 cases:
@@ -94,34 +101,26 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
                 F[row_idx, col_idx] ^= True
 
         # Get unique F columns with indices mapping back to F.
-        size_uniq_F = 0
         for j in range(size_I):
-            uniq_flag = 1
-            for i in range(size_uniq_F):
-                if _equal_column(uniq_F, i, F, I[j]):
-                    # Not unique, only record index.
-                    indices[j] = i
-                    uniq_flag = 0
-                    break
+            Fvec_str = string(b' ', q)
+            for i in range(q):
+                Fvec_str[i] = b'1' if F[i, I[j]] else b'0'
 
-            if uniq_flag:
-                # Unique column.
-                for i in range(uniq_F.shape[0]):
-                    uniq_F[i, size_uniq_F] = F[i, I[j]]
-                indices[j] = size_uniq_F
-                size_uniq_F += 1
+            if uniq_F.count(Fvec_str) > 0:
+                uniq_F[Fvec_str].push_back(j)
+            else:
+                uniq_F[Fvec_str] = vector[int](1, j)
 
         # Solve grouped normal equations
-        for uniq_idx in range(size_uniq_F):
-            for i in range(uniq_F.shape[0]):
-                Fvec[i] = uniq_F[i, uniq_idx]
+        it = uniq_F.begin()
+        while it != uniq_F.end():
+            for i in range(q):
+                Fvec[i] = 1 if dereference(it).first[i] == b'1' else 0
 
-            # Ii = I[indices == uniq_idx]
             size_Ii = 0
-            for i in range(size_I):
-                if indices[i] == uniq_idx:
-                    Ii[size_Ii] = I[i]
-                    size_Ii += 1
+            for i in range(dereference(it).second.size()):
+                Ii[size_Ii] = I[dereference(it).second[i]]
+                size_Ii += 1
 
             nF = 0
             for i in range(Fvec.size):
@@ -129,30 +128,31 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
             nG = q - nF
 
             if nF > 0:
+                # CTC_L = CTC[Fvec, Fvec]
                 CTC_L_M = 0
                 for i in range(q):
-                    CTC_L_N = 0
                     if Fvec[i]:
+                        CTC_L_N = 0
                         for j in range(q):
                             if Fvec[j]:
                                 CTC_L[CTC_L_M, CTC_L_N] = CTC[i, j]
                                 CTC_L_N += 1
                         CTC_L_M += 1
-                assert CTC_L_M == CTC_L_N, "CTC submatrix is not square!"
+                assert CTC_L_M == CTC_L_N, "CTC_L is not square!"
 
-                L = torch.cholesky(torch.tensor(CTC_L[0:CTC_L_M, 0:CTC_L_N], device=device_type))
+                L = torch.cholesky(CTC_L[0:CTC_L_M, 0:CTC_L_N])
 
+                # CTB_L = CTB[Fvec, Ii]
                 CTB_L_M = 0
                 for i in range(q):
-                    CTB_L_N = 0
                     if Fvec[i]:
+                        CTB_L_N = 0
                         for j in range(size_Ii):
                             CTB_L[CTB_L_M, CTB_L_N] = CTB[i, Ii[j]]
                             CTB_L_N += 1
                         CTB_L_M += 1
 
-                x = torch.cholesky_solve(torch.tensor(CTB_L[0:CTB_L_M, 0:CTB_L_N], device=device_type), L)
-                x = x.numpy() if device_type == 'cpu' else x.cpu().numpy()
+                x = torch.cholesky_solve(CTB_L[0:CTB_L_M, 0:CTB_L_N], L)
 
                 k = 0
                 for i in range(q):
@@ -163,24 +163,35 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
                         k += 1
 
             if nG > 0:
+                if nF > 0:
+                    # CTC_L = CTC[~Fvec, Fvec]
+                    CTC_L_M = 0
+                    for i in range(q):
+                        if not Fvec[i]:
+                            CTC_L_N = 0
+                            for j in range(q):
+                                if Fvec[j]:
+                                    CTC_L[CTC_L_M, CTC_L_N] = CTC[i, j]
+                                    CTC_L_N += 1
+                            CTC_L_M += 1
+                    assert CTC_L_M + CTC_L_N == q, "CTC_L has incorrect shape!"
+                    y_tensor = CTC_L[0:CTC_L_M, 0:CTC_L_N] @ x
+                    y = y_tensor.cpu().numpy()
+
                 k = 0
                 for i in range(q):
                     if not Fvec[i]:
-                        for j in range(x.shape[1]):
-                            y[k, j] = 0.0
-                            if nF > 0:
-                                # CTC[~Fvec, Fvec] @ x
-                                m = 0
-                                for l in range(q):
-                                    if Fvec[l]:
-                                        y[k, j] += CTC[k, l] * x[m, j]
-                                        m += 1
+                        for j in range(size_Ii):
+                            if nF <= 0:
+                                y[k, j] = 0.0
                             y[k, j] -= CTB[i, Ii[j]]
                             if np.abs(y[k, j]) < 1e-12:
                                 y[k, j] = 0.0
                             Y[i, Ii[j]] = y[k, j]
                             X[i, Ii[j]] = 0.0
                         k += 1
+
+            postincrement(it)
 
         for j in range(size_I):
             Vsize_I[j] = 0
@@ -200,13 +211,3 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
         n_iter += 1
 
     return n_iter if I.size == 0 else -1
-
-
-@cython.boundscheck(False)
-@cython.wraparound(False)
-cdef _equal_column(uint8[:, :] mat_A, int col_A, uint8[:, :] mat_B, int col_B):
-    for i in range(mat_A.shape[0]):
-        if mat_A[i, col_A] != mat_B[i, col_B]:
-            return 0
-
-    return 1

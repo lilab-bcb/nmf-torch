@@ -1,10 +1,10 @@
 import torch
 
-from ._inmf_base import INMFBase
+from ._inmf_batch_base import INMFBatchBase
 from ._nnls_bpp import nnls_bpp
 from typing import List, Union
 
-class INMFBatchNnlsBpp(INMFBase):
+class INMFBatchNnlsBpp(INMFBatchBase):
     def __init__(
         self,
         n_components: int,
