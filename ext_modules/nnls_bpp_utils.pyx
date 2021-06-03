@@ -210,4 +210,4 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
 
         n_iter += 1
 
-    return n_iter if I.size == 0 else -1
+    return n_iter if size_I == 0 else -1
