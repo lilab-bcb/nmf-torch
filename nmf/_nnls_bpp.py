@@ -20,4 +20,10 @@ def nnls_bpp(CTC, CTB, X, device_type) -> int:
     # dtype = C.dtype
     # X = torch.zeros((q, r), dtype=dtype)
 
-    return _nnls_bpp(CTC.numpy(), CTB.numpy(), X.numpy(), device_type)
+    if device_type == 'cpu':
+        return _nnls_bpp(CTC.numpy(), CTB.numpy(), X.numpy(), 'cpu')
+    else:
+        X_cpu = torch.zeros_like(X, device='cpu')
+        n_iter = _nnls_bpp(CTC.cpu().numpy(), CTB.cpu().numpy(), X_cpu.numpy(), 'gpu')
+        X[:] = X_cpu.cuda()
+        return n_iter

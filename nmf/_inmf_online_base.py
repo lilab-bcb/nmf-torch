@@ -15,10 +15,6 @@ class INMFOnlineBase(INMFBase):
         device_type: str = 'cpu',
         max_pass: int = 20,
         chunk_size: int = 5000,
-        chunk_max_iter: int = 200,
-        h_tol: float = 0.01,
-        v_tol: float = 0.1,
-        w_tol: float = 0.01,
     ):
         super().__init__(
             n_components=n_components,
@@ -32,10 +28,6 @@ class INMFOnlineBase(INMFBase):
 
         self._max_pass = max_pass
         self._chunk_size = chunk_size
-        self._chunk_max_iter = chunk_max_iter
-        self._h_tol = h_tol
-        self._v_tol = v_tol
-        self._w_tol = w_tol
 
 
     def _h_err(self, h, hth, WVWVT, xWVT, VVT):

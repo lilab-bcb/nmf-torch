@@ -5,24 +5,38 @@
 
 import numpy as np
 import torch
-import time
 
 cimport cython
 
-from libcpp.unordered_map cimport unordered_map
 from libcpp.vector cimport vector
 from libcpp.string cimport string
-from cython.operator import dereference, postincrement
+from libcpp.unordered_map cimport unordered_map
+from cython.operator import dereference as deref
+from cython.operator import postincrement as pinc
 
 ctypedef unsigned char uint8
+
+ctypedef fused array_type:
+    float
+    double
+
+
+cdef inline array_type _filter(array_type number, array_type tol):
+    if number > -tol and number < tol:
+        return 0.0
+    return number
 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type):
+cpdef _nnls_bpp(array_type[:, :] CTC, array_type[:, :] CTB, array_type[:, :] X, str device_type):
     # CTC = C.T @ C, CTB = C.T @ B, X.shape = (q, r)
+    numpy_type = np.float32 if array_type is float else np.float64
+    torch_type = torch.float if array_type is float else torch.double
+    cdef array_type tol = 1e-6 if array_type is float else 1e-12
 
-    cdef Py_ssize_t i, j, k, l, m, uniq_idx
+    cdef Py_ssize_t i, j, col_idx, row_idx
+    cdef Py_ssize_t n_iter, fvsize, gvsize, uqsize, size_I, pos
 
     cdef int q = CTB.shape[0]
     cdef int r = CTB.shape[1]
@@ -33,12 +47,33 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
     cdef int[:] beta = np.full(r, q+1, dtype=np.int32)  # number of infeasible variables
 
     ### Initialization, setting G = 1-q
-    cdef float[:, :] Y = np.zeros_like(CTB, dtype=np.float32)
+    cdef array_type[:, :] Y = np.zeros_like(CTB, dtype=numpy_type)
     cdef uint8[:, :] V = np.zeros((q, r), dtype=np.bool_)
     cdef int[:] Vsize = np.zeros((r,), dtype=np.int32)
-    cdef int[:] I = np.zeros((r,), dtype=np.int32)  # infeasible columns
-    cdef int size_I = 0
 
+    cdef vector[int] I
+
+    cdef uint8[:, :] F = np.zeros((q, r), dtype=np.bool_)  # y_F = 0, G = ~F, x_G = 0
+
+    CTC_L_tensor = torch.zeros((q, q), dtype=torch_type, device='cpu')
+    cdef array_type[:, :] CTC_L = CTC_L_tensor.numpy()
+    CTB_L_tensor = torch.zeros((q, r), dtype=torch_type, device='cpu')
+    cdef array_type[:, :] CTB_L = CTB_L_tensor.numpy()
+
+    cdef array_type[:, :] x
+    cdef array_type[:, :] y
+
+    cdef unordered_map[string, vector[int]] uniq_F
+    cdef unordered_map[string, vector[int]].iterator it
+
+    cdef string Fvec_str
+    Fvec_str.resize(q, b' ')
+
+    cdef vector[int] Fvec
+    cdef vector[int] Gvec
+
+
+    I.clear()
     for j in range(r):
         for i in range(q):
             X[i, j] = 0.0
@@ -47,36 +82,12 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
             Vsize[j] += V[i, j]
 
         if Vsize[j] > 0:
-            I[size_I] = j
-            size_I += 1
+            I.push_back(j)
 
-
-    CTC_L_tensor = torch.zeros((q, q), dtype=torch.float, device=device_type)
-    cdef float[:, :] CTC_L = CTC_L_tensor.numpy()
-    CTB_L_tensor = torch.zeros((q, r), dtype=torch.float, device=device_type)
-    cdef float[:, :] CTB_L = CTB_L_tensor.numpy()
-    cdef Py_ssize_t CTC_L_M, CTC_L_N, CTB_L_M, CTB_L_N
-
-
-    cdef uint8[:, :] F = np.zeros((q, r), dtype=np.bool_)  # y_F = 0, G = ~F, x_G = 0
-
-    cdef unordered_map[string, vector[int]] uniq_F = unordered_map[string, vector[int]]()
-    cdef unordered_map[string, vector[int]].iterator it
-    cdef string Fvec_str
-    cdef int[:] indices = np.zeros((r,), dtype=np.int32)
-    cdef uint8[:] Fvec = np.zeros((q,), dtype=np.bool_)
-    cdef int[:] Ii = np.zeros((r,), dtype=np.int32)
-    cdef uint8[:, :] V_I = np.zeros((q, r), dtype=np.bool_)
-    cdef int[:] Vsize_I = np.zeros((r,), dtype=np.int32)
-    cdef float[:, :] y = np.zeros((q, r), dtype=np.float32)
-
-    cdef int col_idx, row_idx, nF, nG, size_uniq_F, size_Ii
-
-    cdef int n_iter = 0
-    while size_I > 0 and n_iter < max_iter:
+    n_iter = 0
+    while I.size() > 0 and n_iter < max_iter:
         # Split indices in I into 3 cases:
-        for j in range(size_I):
-            col_idx = I[j]
+        for col_idx in I:
             if Vsize[col_idx] < beta[col_idx]:
                 # Case 1: Apply full exchange rule
                 alpha[col_idx] = backup_cap
@@ -97,120 +108,88 @@ cpdef _nnls_bpp(float[:, :] CTC, float[:, :] CTB, float[:, :] X, str device_type
                         break
                 F[row_idx, col_idx] ^= 1
 
-
-        _start = time.perf_counter()
         # Get unique F columns with indices mapping back to F.
         uniq_F.clear()
-        for j in range(size_I):
-            Fvec_str = string(b' ', q)
+        for col_idx in I:
             for i in range(q):
-                Fvec_str[i] = b'1' if F[i, I[j]] else b'0'
+                Fvec_str[i] = b'1' if F[i, col_idx] else b'0'
 
-            if uniq_F.count(Fvec_str) > 0:
-                uniq_F[Fvec_str].push_back(j)
+            it = uniq_F.find(Fvec_str)
+            if it != uniq_F.end():
+                deref(it).second.push_back(col_idx)
             else:
-                uniq_F[Fvec_str] = vector[int](1, j)
-        _end = time.perf_counter()
-        print(f"n_iter={n_iter}, Time spent = {_end-_start:.6f}s.")
+                uniq_F[Fvec_str] = vector[int](1, col_idx)
 
         # Solve grouped normal equations
         it = uniq_F.begin()
         while it != uniq_F.end():
+            Fvec.clear()
+            Gvec.clear()
             for i in range(q):
-                Fvec[i] = 1 if dereference(it).first[i] == b'1' else 0
+                if deref(it).first[i] == b'1':
+                    Fvec.push_back(i)
+                else:
+                    Gvec.push_back(i)
 
-            size_Ii = 0
-            for i in range(dereference(it).second.size()):
-                Ii[size_Ii] = I[dereference(it).second[i]]
-                size_Ii += 1
+            fvsize = Fvec.size()
+            gvsize = Gvec.size()
+            uqsize = deref(it).second.size()
 
-            nF = 0
-            for i in range(Fvec.size):
-                nF += Fvec[i]
-            nG = q - nF
-
-            if nF > 0:
+            if fvsize > 0:
                 # CTC_L = CTC[Fvec, Fvec]
-                CTC_L_M = 0
-                for i in range(q):
-                    if Fvec[i]:
-                        CTC_L_N = 0
-                        for j in range(q):
-                            if Fvec[j]:
-                                CTC_L[CTC_L_M, CTC_L_N] = CTC[i, j]
-                                CTC_L_N += 1
-                        CTC_L_M += 1
-                assert CTC_L_M == CTC_L_N, f"CTC_L of shape ({CTC_L_M}, {CTC_L_N}) is not square!"
-
-                L = torch.cholesky(CTC_L_tensor[0:CTC_L_M, 0:CTC_L_N])
-
+                for i in range(fvsize):
+                    for j in range(fvsize):
+                        CTC_L[i, j] = CTC[Fvec[i], Fvec[j]]
+                L_tensor = torch.cholesky(CTC_L_tensor[0:fvsize, 0:fvsize]) if device_type == 'cpu' else torch.cholesky(CTC_L_tensor[0:fvsize, 0:fvsize].cuda())
                 # CTB_L = CTB[Fvec, Ii]
-                CTB_L_M = 0
-                for i in range(q):
-                    if Fvec[i]:
-                        CTB_L_N = 0
-                        for j in range(size_Ii):
-                            CTB_L[CTB_L_M, CTB_L_N] = CTB[i, Ii[j]]
-                            CTB_L_N += 1
-                        CTB_L_M += 1
-                assert CTB_L_M==CTC_L_M and CTB_L_N==size_Ii, f"CTB_L has shape ({CTB_L_M}, {CTB_L_N}), but expect ({CTC_L_M}, {size_Ii})."
-
-                x = torch.cholesky_solve(CTB_L_tensor[0:CTB_L_M, 0:CTB_L_N], L)
-
-                k = 0
-                for i in range(q):
-                    if Fvec[i]:
-                        for j in range(size_Ii):
-                            X[i, Ii[j]] = x[k, j] if np.abs(x[k, j]) >= 1e-12 else 0.0
-                            Y[i, Ii[j]] = 0.0
-                        k += 1
-
-            if nG > 0:
-                if nF > 0:
+                for i in range(fvsize):
+                    for j in range(uqsize):
+                        CTB_L[i, j] = CTB[Fvec[i], deref(it).second[j]]
+                x_tensor = torch.cholesky_solve(CTB_L_tensor[0:fvsize, 0:uqsize], L_tensor) if device_type == 'cpu' else torch.cholesky_solve(CTB_L_tensor[0:fvsize, 0:uqsize].cuda(), L_tensor)
+                x = x_tensor.cpu().numpy()
+                # clean up
+                for i in range(fvsize):
+                    for j in range(uqsize):
+                        X[Fvec[i], deref(it).second[j]] = _filter(x[i, j], tol)
+                        Y[Fvec[i], deref(it).second[j]] = 0.0
+            
+            if gvsize > 0:
+                if fvsize > 0:
                     # CTC_L = CTC[~Fvec, Fvec]
-                    CTC_L_M = 0
-                    for i in range(q):
-                        if not Fvec[i]:
-                            CTC_L_N = 0
-                            for j in range(q):
-                                if Fvec[j]:
-                                    CTC_L[CTC_L_M, CTC_L_N] = CTC[i, j]
-                                    CTC_L_N += 1
-                            CTC_L_M += 1
-                    assert CTC_L_M + CTC_L_N == q, "CTC_L has shape ({CTC_L_M}, {CTC_L_N}), but expect sum of dims = {q}!"
-                    y_tensor = CTC_L_tensor[0:CTC_L_M, 0:CTC_L_N] @ x
+                    for i in range(gvsize):
+                        for j in range(fvsize):
+                            CTC_L[i, j] = CTC[Gvec[i], Fvec[j]]
+                    y_tensor = (CTC_L_tensor[0:gvsize, 0:fvsize] @ x_tensor) if device_type == 'cpu' else (CTC_L_tensor[0:gvsize, 0:fvsize].cuda() @ x_tensor)
                     y = y_tensor.cpu().numpy()
 
-                k = 0
-                for i in range(q):
-                    if not Fvec[i]:
-                        for j in range(size_Ii):
-                            if nF <= 0:
-                                y[k, j] = 0.0
-                            y[k, j] -= CTB[i, Ii[j]]
-                            if np.abs(y[k, j]) < 1e-12:
-                                y[k, j] = 0.0
-                            Y[i, Ii[j]] = y[k, j]
-                            X[i, Ii[j]] = 0.0
-                        k += 1
+                    for i in range(gvsize):
+                        row_idx = Gvec[i]
+                        for j in range(uqsize):
+                            col_idx = deref(it).second[j]
+                            Y[row_idx, col_idx] = _filter(y[i,j] - CTB[row_idx, col_idx], tol)
+                            X[row_idx, col_idx] = 0.0
+                else:
+                    for i in range(gvsize):
+                        row_idx = Gvec[i]
+                        for j in range(uqsize):
+                            col_idx = deref(it).second[j]
+                            Y[row_idx, col_idx] = _filter(-CTB[row_idx, col_idx], tol)
+                            X[row_idx, col_idx] = 0.0
 
-            postincrement(it)
+            pinc(it)
 
-        for j in range(size_I):
-            Vsize_I[j] = 0
-            for i in range(V_I.shape[0]):
-                V_I[i, j] = ((X[i, I[j]] < 0.0) & F[i, I[j]]) | ((Y[i, I[j]] < 0.0) & (~F[i, I[j]]))
-                Vsize_I[j] += V_I[i, j]
-                V[i, I[j]] = V_I[i, j]
-            Vsize[I[j]] = Vsize_I[j]
-
-        old_size_I = size_I
         size_I = 0
-        for i in range(old_size_I):
-            if Vsize_I[i] > 0:
-                I[size_I] = I[i]
+        for j in range(I.size()):
+            pos = I[j]
+            Vsize[pos] = 0
+            for i in range(q):
+                V[i, pos] = ((X[i, pos] < 0.0) & F[i, pos]) | ((Y[i, pos] < 0.0) & (F[i, pos] == 0))
+                Vsize[pos] += V[i, pos]
+            if Vsize[pos] > 0:
+                I[size_I] = pos
                 size_I += 1
+        I.resize(size_I)
 
         n_iter += 1
 
-    return n_iter if size_I == 0 else -1
+    return n_iter if I.size() == 0 else -1
