@@ -1,3 +1,4 @@
+import numpy
 import torch
 
 from typing import List, Union
@@ -62,29 +63,38 @@ class INMFBase:
         return prev_err <= cur_err or torch.abs((prev_err - cur_err) / init_err) < self._tol
 
 
+    def _cast_tensor(self, X):
+        if not isinstance(X, torch.Tensor):
+            if self._device_type == 'cpu' and ((self._device_type == torch.float32 and X.dtype == numpy.float32) or (self._device_type == torch.double and X.dtype == numpy.float64)):
+                X = torch.from_numpy(X)
+            else:    
+                X = torch.tensor(X, dtype=self._tensor_dtype, device=self._device_type)
+        else:
+            if self._device_type != 'cpu' and (not X.is_cuda):
+                X = X.to(device=self._device_type)
+            if X.dtype != self._tensor_dtype:
+                X = X.type(self._tensor_dtype)
+        return X
+
+
     def fit(
         self,
-        mats: List[torch.tensor],
+        mats: Union[List[numpy.ndarray], List[torch.tensor]],
     ):
         torch.manual_seed(self._random_state)
         self._n_batches = len(mats)
         if self._n_batches <= 1:
-            print("    No need to integrate!")
+            print(f"    Contains only {self._n_batches}, no need to integrate!")
             return
 
         self._n_features = mats[0].shape[1]
         for i in range(self._n_batches):
+            mats[i] = self._cast_tensor(mats[i])
             if mats[i].shape[1] != self._n_features:
                 raise ValueError(f"Number of features must be the same across samples, while Sample {i} is not!")
             if torch.any(mats[i] < 0):
                 raise ValueError(f"Input matrix {i} is not non-negative. NMF cannot be applied.")
-
-        if self._device_type == 'cpu':
-            self.X = mats
-        else:
-            self.X = []
-            for X in mats:
-                self.X.append(X.cuda())
+        self.X = mats
 
         # Cache Sum of squares of Xs.
         self._SSX = torch.tensor(0.0, dtype=torch.double, device=self._device_type) # make sure _SSX is double to avoid summation errors

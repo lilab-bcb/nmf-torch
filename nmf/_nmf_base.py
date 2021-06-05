@@ -1,3 +1,4 @@
+import numpy
 import torch
 
 from typing import Union
@@ -132,17 +133,27 @@ class NMFBase:
         self.W = W
 
 
-    def fit(self, X):
-        torch.manual_seed(self._random_state)
-
+    def _cast_tensor(self, X):
         if not isinstance(X, torch.Tensor):
-            X = torch.tensor(X, dtype=self._tensor_dtype, device=self._device_type)
+            if self._device_type == 'cpu' and ((self._device_type == torch.float32 and X.dtype == numpy.float32) or (self._device_type == torch.double and X.dtype == numpy.float64)):
+                X = torch.from_numpy(X)
+            else:    
+                X = torch.tensor(X, dtype=self._tensor_dtype, device=self._device_type)
         else:
+            if self._device_type != 'cpu' and (not X.is_cuda):
+                X = X.to(device=self._device_type)
             if X.dtype != self._tensor_dtype:
                 X = X.type(self._tensor_dtype)
-            if self._device_type == 'cuda' and (not X.is_cuda):
-                X = X.to(device=self._device_type)
+        return X
 
+
+    def fit(
+        self,
+        X: Union[numpy.ndarray, torch.tensor]
+    ):
+        torch.manual_seed(self._random_state)
+
+        X = self._cast_tensor(X)
         if torch.any(X < 0):
             raise ValueError("The input matrix is not non-negative. NMF cannot be applied.")
 
