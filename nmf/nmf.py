@@ -173,8 +173,6 @@ def run_nmf(
                 device_type=device_type,
                 max_pass=online_max_pass,
                 chunk_size=online_chunk_size,
-                w_max_iter=online_w_max_iter,
-                h_max_iter=online_h_max_iter,
             )
         elif update_method == 'batch hals':
             model = NMFBatchHALS(
@@ -206,8 +204,6 @@ def run_nmf(
                 device_type=device_type,
                 max_pass=online_max_pass,
                 chunk_size=online_chunk_size,
-                w_max_iter=online_w_max_iter,
-                h_max_iter=online_h_max_iter,
             )
 
     else:
@@ -217,7 +213,5 @@ def run_nmf(
     W = model.W
     err = model.reconstruction_err
 
-    if device_type == 'cpu':
-        return H.numpy(), W.numpy(), err.numpy()
-    else:
-        return H.cpu().numpy(), W.cpu().numpy(), err.cpu().numpy()
+
+    return H.cpu().numpy(), W.cpu().numpy(), err.cpu().numpy()
