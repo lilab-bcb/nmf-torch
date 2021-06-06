@@ -4,6 +4,7 @@ from ._inmf_batch_base import INMFBatchBase
 from ._nnls_bpp import nnls_bpp
 from typing import List, Union
 
+
 class INMFBatchNnlsBpp(INMFBatchBase):
     def _update_H_V_W(self):
         W_numer = torch.zeros_like(self.W)

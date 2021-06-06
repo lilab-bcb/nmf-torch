@@ -38,11 +38,11 @@ class NMFOnlineHALS(NMFOnlineBase):
             device_type=device_type,
             max_pass=max_pass,
             chunk_size=chunk_size,
-            chunk_max_iter=chunk_max_iter,
-            h_tol=h_tol,
-            w_tol=w_tol,
         )
 
+        self._chunk_max_iter = chunk_max_iter
+        self._h_tol = h_tol
+        self._w_tol = w_tol
         self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
 
 

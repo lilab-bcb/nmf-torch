@@ -19,10 +19,9 @@ class NMFOnlineBase(NMFBase):
         device_type: str,
         max_pass: int = 20,
         chunk_size: int = 5000,
-        chunk_max_iter: int = 200,
-        h_tol: float = 0.05,
-        w_tol: float = 0.05,
     ):
+        assert beta_loss == 2.0 # only work for F norm for now
+        
         super().__init__(
             n_components=n_components,
             init=init,
@@ -39,9 +38,6 @@ class NMFOnlineBase(NMFBase):
 
         self._max_pass = max_pass
         self._chunk_size = chunk_size
-        self._chunk_max_iter = chunk_max_iter
-        self._h_tol = h_tol
-        self._w_tol = w_tol
 
 
     def _h_err(self, h, hth, WWT, xWT):

@@ -1,10 +1,11 @@
 import torch
 
-from typing import Union
 from ._nmf_online_base import NMFOnlineBase
+from ._nnls_bpp import nnls_bpp
+from typing import Union
 
 
-class NMFOnlineMU(NMFOnlineBase):
+class NMFOnlineNnlsBpp(NMFOnlineBase):
     def __init__(
         self,
         n_components: int,
@@ -20,9 +21,6 @@ class NMFOnlineMU(NMFOnlineBase):
         device_type: str,
         max_pass: int = 20,
         chunk_size: int = 5000,
-        chunk_max_iter: int = 200,
-        h_tol: float = 0.05,
-        w_tol: float = 0.05,
     ):
         super().__init__(
             n_components=n_components,
@@ -40,17 +38,31 @@ class NMFOnlineMU(NMFOnlineBase):
             chunk_size=chunk_size,
         )
 
-        self._chunk_max_iter = chunk_max_iter
-        self._h_tol = h_tol
-        self._w_tol = w_tol
+        if self._l2_reg_H > 0.0:
+            self._l2_H_I = torch.eye(self.k, dtype=self._tensor_dtype, device=self._device_type) * self._l2_reg_H
+        if self._l2_reg_W > 0.0:
+            self._l2_W_I = torch.eye(self.k, dtype=self._tensor_dtype, device=self._device_type)
 
 
-    def _update_matrix(self, mat, numer, denom):
-        rates = numer / denom
-        rates[denom < self._epsilon] = 0.0
-        cur_max = (torch.abs(1.0 - rates) * mat).max()
-        mat *= rates
-        return cur_max
+    def _get_regularization_loss(self, mat, l1_reg, l2_reg):
+        res = 0.0
+        if l1_reg > 0:
+            dim = 0 if mat.shape[0] == self.k else 1
+            res += l1_reg * mat.norm(p=1, dim=dim).norm(p=2)**2
+        if l2_reg > 0:
+            res += l2_reg * mat.norm(p=2)**2 / 2
+        return res
+
+
+    def _h_err(self, h, hth, WWT, xWT):
+        # Forbenious-norm^2 in trace format (No X)
+        res = self._trace(WWT, hth) / 2.0 - self._trace(h, xWT)
+        # Add regularization terms if needed
+        if self._l1_reg_H > 0.0:
+            res += self._l1_reg_H * h.norm(p=1, dim=1).norm(p=2)**2
+        if self._l2_reg_H > 0.0:
+            res += self._l2_reg_H * torch.trace(hth) / 2.0
+        return res
 
 
     def _update_one_pass(self, l1_reg_W, l2_reg_W):
@@ -70,20 +82,16 @@ class NMFOnlineMU(NMFOnlineBase):
             WWT = self.W @ self.W.T
             xWT = x @ self.W.T
 
-            if self._l1_reg_H > 0.0:
-                h_factor_numer = xWT - self._l1_reg_H
-                h_factor_numer[h_factor_numer < 0.0] = 0.0
+            if self._l1_reg_H == 0.0 and self._l2_reg_H == 0.0:
+                n_iter = nnls_bpp(WWT, xWT.T, h.T, self._device_type)
             else:
-                h_factor_numer = xWT
-
-            for j in range(self._chunk_max_iter):
-                h_factor_denom = h @ WWT
-                if self._l2_reg_H:
-                    h_factor_denom += self._l2_reg_H * h
-                cur_max = self._update_matrix(h, h_factor_numer, h_factor_denom)
-                if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
-                    break
-            # print(f"Block {i} update H iterates {j+1} iterations.")
+                CTC = WWT.clone()
+                if self._l1_reg_H > 0.0:
+                    CTC += 2.0 * self._l1_reg_H
+                if self._l2_reg_H > 0.0:
+                    CTC += self._l2_H_I
+                n_iter = nnls_bpp(CTC, xWT.T, h.T, self._device_type)
+            # print(f"Block {i} update H iterates {n_iter} iterations.")
             self.H[idx, :] = h
 
             # Update sufficient statistics A and B.
@@ -100,20 +108,16 @@ class NMFOnlineMU(NMFOnlineBase):
             num_processed = num_after
 
             # Online update W.
-            if l1_reg_W > 0.0:
-                W_factor_numer = B - l1_reg_W
-                W_factor_numer[W_factor_numer < 0.0] = 0.0
+            if l1_reg_W == 0.0 and l2_reg_W == 0.0:
+                n_iter = nnls_bpp(A, B, self.W, self._device_type)
             else:
-                W_factor_numer = B
-
-            for j in range(self._chunk_max_iter):
-                W_factor_denom = A @ self.W
+                CTC = A.clone()
+                if l1_reg_W > 0.0:
+                    CTC += 2.0 * l1_reg_W
                 if l2_reg_W > 0.0:
-                    W_factor_denom += l2_reg_W * self.W
-                cur_max = self._update_matrix(self.W, W_factor_numer, W_factor_denom)
-                if j + 1 < self._chunk_max_iter and cur_max / self.W.mean() < self._w_tol:
-                    break
-            # print(f"Block {i} update W iterates {j+1} iterations.")
+                    CTC += self._l2_W_I
+                n_iter = nnls_bpp(CTC, B, self.W, self._device_type)
+            # print(f"Block {i} update W iterates {n_iter} iterations.")
 
             i += self._chunk_size
 
@@ -129,21 +133,16 @@ class NMFOnlineMU(NMFOnlineBase):
 
             xWT = x @ self.W.T
 
-            if self._l1_reg_H > 0.0:
-                h_factor_numer = xWT - self._l1_reg_H
-                h_factor_numer[h_factor_numer < 0.0] = 0.0
+            if self._l1_reg_H == 0.0 and self._l2_reg_H == 0.0:
+                n_iter = nnls_bpp(WWT, xWT.T, h.T, self._device_type)
             else:
-                h_factor_numer = xWT
-
-            for j in range(self._chunk_max_iter):
-                h_factor_denom = h @ WWT
-                if self._l2_reg_H:
-                    h_factor_denom += self._l2_reg_H * h
-                cur_max = self._update_matrix(h, h_factor_numer, h_factor_denom)
-                if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
-                    break
-
-            # print(f"Block {i} update H iterates {j+1} iterations.")
+                CTC = WWT.clone()
+                if self._l1_reg_H > 0.0:
+                    CTC += 2.0 * self._l1_reg_H
+                if self._l2_reg_H > 0.0:
+                    CTC += self._l2_H_I
+                n_iter = nnls_bpp(CTC, xWT.T, h.T, self._device_type)
+            # print(f"Block {i} update H iterates {n_iter} iterations.")
 
             hth = h.T @ h
             sum_h_err += self._h_err(h, hth, WWT, xWT)
@@ -162,6 +161,8 @@ class NMFOnlineMU(NMFOnlineBase):
 
         l1_reg_W = self._l1_reg_W / self.X.shape[0]
         l2_reg_W = self._l2_reg_W / self.X.shape[0]
+        if l2_reg_W > 0.0:
+            self._l2_W_I *= l2_reg_W
 
         self.num_iters = -1
         for i in range(self._max_pass):

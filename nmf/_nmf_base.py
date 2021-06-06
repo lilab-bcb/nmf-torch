@@ -53,9 +53,9 @@ class NMFBase:
 
     def _get_regularization_loss(self, mat, l1_reg, l2_reg):
         res = 0.0
-        if l1_reg > 0:
+        if l1_reg > 0.0:
             res += l1_reg * mat.norm(p=1)
-        if l2_reg > 0:
+        if l2_reg > 0.0:
             res += l2_reg * mat.norm(p=2)**2 / 2
         return res
 
