@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 from typing import Union, Tuple
-from ._nmf_batch import NMFBatch
-from ._nmf_online import NMFOnline
+from ._nmf_batch_mu import NMFBatchMU
+from ._nmf_online_mu import NMFOnlineMU
 from ._nmf_batch_hals import NMFBatchHALS
 from ._nmf_online_hals import NMFOnlineHALS
 
@@ -144,7 +144,7 @@ def run_nmf(
             update_method = 'batch'
 
         if update_method == 'batch mu':
-            model = NMFBatch(
+            model = NMFBatchMU(
                 n_components=n_components,
                 init=init,
                 beta_loss=beta_loss,
@@ -159,7 +159,7 @@ def run_nmf(
                 max_iter=max_iter,
             )
         elif update_method == 'online mu':
-            model = NMFOnline(
+            model = NMFOnlineMU(
                 n_components=n_components,
                 init=init,
                 beta_loss=beta_loss,
@@ -211,7 +211,7 @@ def run_nmf(
             )
 
     else:
-        raise ValueError("Parameter update_method must be a valid value from ['batch', 'online']!")
+        raise ValueError("Parameter update_method must be a valid value from ['batch mu', 'online mu', 'batch hals', 'online hals']!")
 
     H = model.fit_transform(X)
     W = model.W
