@@ -32,20 +32,26 @@ class INMFBase:
 
 
     def _initialize_W_H_V(self):
-        W = torch.zeros((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
-        self.H = []
-        self.V = []
+        ##W = torch.zeros((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
+        ##self.H = []
+        ##self.V = []
 
         # Random initialization
+        ##for k in range(self._n_batches):
+        ##    avg = torch.sqrt(self.X[k].mean() / self._n_components)
+        ##    H = torch.abs(avg * torch.randn((self.X[k].shape[0], self._n_components), dtype=self._tensor_dtype, device=self._device_type))
+        ##    V = torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
+        ##    self.H.append(H)
+        ##    self.V.append(V)
+        ##    W += torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
+        ##W /= self._n_batches
+        ##self.W = W
+        W = 2.0 * torch.rand((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
+        self.H = []
+        self.V = []
         for k in range(self._n_batches):
-            avg = torch.sqrt(self.X[k].mean() / self._n_components)
-            H = torch.abs(avg * torch.randn((self.X[k].shape[0], self._n_components), dtype=self._tensor_dtype, device=self._device_type))
-            V = torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
-            self.H.append(H)
-            self.V.append(V)
-            W += torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
-        W /= self._n_batches
-        self.W = W
+            H = 2.0 * torch.rand((self.X[k].shape[0], self._n_components), dtype=self._tensor_dtype, device=self._device_type)
+            V = 2.0 * torch.rand((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
 
 
     def _trace(self, A, B):
