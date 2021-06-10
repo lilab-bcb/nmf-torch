@@ -52,6 +52,8 @@ class INMFBase:
         for k in range(self._n_batches):
             H = 2.0 * torch.rand((self.X[k].shape[0], self._n_components), dtype=self._tensor_dtype, device=self._device_type)
             V = 2.0 * torch.rand((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
+            self.H.append(H)
+            self.V.append(V)
 
 
     def _trace(self, A, B):
