@@ -46,7 +46,7 @@ class INMFBase:
         ##    W += torch.abs(0.5 * avg * torch.randn((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type))
         ##W /= self._n_batches
         ##self.W = W
-        W = 2.0 * torch.rand((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
+        self.W = 2.0 * torch.rand((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
         self.H = []
         self.V = []
         for k in range(self._n_batches):
