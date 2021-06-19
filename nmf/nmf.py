@@ -1,30 +1,33 @@
 import numpy as np
 import torch
 from typing import Union, Tuple
-from ._nmf_batch_mu import NMFBatchMU
-from ._nmf_online_mu import NMFOnlineMU
-from ._nmf_batch_hals import NMFBatchHALS
-from ._nmf_online_hals import NMFOnlineHALS
+
+from nmf import NMFBatchMU, NMFBatchHALS, NMFBatchNnlsBpp, NMFOnlineMU, NMFOnlineHALS, NMFOnlineNnlsBpp
+
 
 def run_nmf(
     X: Union[np.array, torch.tensor],
     n_components: int,
     init: str = "nndsvdar",
     beta_loss: Union[str, float] = "frobenius",
-    update_method: str = "batch mu",
-    max_iter: int = 200,
+    algo: str = "hals",
+    mode: str = "batch",
     tol: float = 1e-4,
     random_state: int = 0,
+    use_gpu: bool = False,
     alpha_W: float = 0.0,
     l1_ratio_W: float = 0.0,
     alpha_H: float = 0.0,
     l1_ratio_H: float = 0.0,
     fp_precision: Union[str, torch.dtype] = "float",
-    online_max_pass: int = 10,
-    online_chunk_size: int = 2000,
-    online_w_max_iter: int = 200,
-    online_h_max_iter: int = 50,
-    use_gpu: bool = False,
+    batch_max_iter: int = 500,
+    batch_hals_tol: float = 0.05,
+    batch_hals_max_iter: int = 200,
+    online_max_pass: int = 20,
+    online_chunk_size: int = 5000,
+    online_chunk_max_iter: int = 200,
+    online_h_tol: float = 0.05,
+    online_w_tol: float = 0.05,    
 ) -> Tuple[np.array, np.array, float]:
     """
     Perform Non-negative Matrix Factorization (NMF).
@@ -70,17 +73,16 @@ def run_nmf(
             - ``kullback-leibler``:KL divergence, same as ``beta_loss=1.0``.
             - ``itakura-saito``: Itakura-Saito divergence, same as ``beta_loss=0``.
         Alternatively, it can also be a float number, which gives the beta parameter of the beta loss to be used.
-    update_method: ``str``, optional, default: ``batch``
-        Specify the updating method for H and W matrices.
-        If ``batch``, NMF uses the multiplicative updating (MU) method.
-        If ``online``, use the online MU method. This gives a faster convergence, and scales up to large matrices.
-        Notice that ``online`` only works when ``beta=2.0``. For other beta loss, it switches back to ``batch`` method.
-    max_iter: ``int``, optional, default: ``200``
-        The maximum number of iterations to perform. This is used only when ``update_method="batch"``.
+    algo: ``str``, optional, default: ``hals``
+        Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+    mode: ``str``, optional, default: ``batch``
+        Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``. For other beta loss, it switches back to ``batch`` method.        
     tol: ``float``, optional, default: ``1e-4``
         The toleration used for convergence check.
     random_state: ``int``, optional, default: ``0``
         The random state used for reproducibility on the results.
+    use_gpu: ``bool``, optional, default: ``False``
+        If ``True``, use GPU if available. Otherwise, use CPU only.
     alpha_W: ``float``, optional, default: ``0.0``
         A numeric scale factor which multiplies the regularization terms related to W.
         If zero or negative, no regularization regarding W is considered.
@@ -95,16 +97,22 @@ def run_nmf(
         The numeric precision on the results.
         If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
         Alternatively, choose Pytorch's `torch dtype <https://pytorch.org/docs/stable/tensor_attributes.html>`_ of your own.
-    online_max_pass: ``int``, optional, default: ``10``
-        The maximum number of passes to perform. This is used only when ``update_method="online"``.
-    online_chunk_size: ``int``, optional, default: ``2000``
-        The chunk size when partitioning X regarding samples. This is used only when ``update_method="online"``.
-    online_w_max_iter: ``int``, optional, default: ``200``
-        The maximum number of iterations when updating W in Online algorithm. Used only when ``update_method="online"``.
-    online_h_max_iter: ``int``, optinoal, default: ``50``
-        The maximum number of iterations when updating H (or h, a chunk of H) in Online algorithm. Used only when ``update_method="online"``.
-    use_gpu: ``bool``, optional, default: ``False``
-        If ``True``, use GPU if available. Otherwise, use CPU only.
+    batch_max_iter: ``int``, optional, default: ``500``
+        The maximum number of iterations to perform for batch learning.
+    batch_hals_tol: ``float``, optional, default: ``0.05``
+        For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
+    batch_hals_max_iter: ``int``, optional, default: ``200``
+        Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS. 
+    online_max_pass: ``int``, optional, default: ``20``
+        The maximum number of online passes of all data to perform.
+    online_chunk_size: ``int``, optional, default: ``5000``
+        The chunk / mini-batch size for online learning.
+    online_chunk_max_iter: ``int``, optional, default: ``200``
+        The maximum number of iterations for updating H or W in online learning.
+    online_h_tol: ``float``, optional, default: 0.05
+        The tolerance for updating H in each chunk in online learning.
+    online_w_tol: ``float``, optional, default: 0.05
+        The tolerance for updating W in each chunk in online learning.
 
     Returns
     -------
@@ -118,8 +126,7 @@ def run_nmf(
     Examples
     --------
     >>> H, W, err = run_nmf(X, n_components=20)
-
-    >>> H, W, err = run_nmf(X, n_components=20, init='random', update_method='online')
+    >>> H, W, err = run_nmf(X, n_components=20, init='random', algo='mu', mode='online')
     """
     if beta_loss == 'frobenius':
         beta_loss = 2
@@ -138,80 +145,49 @@ def run_nmf(
         else:
             print("CUDA is not available on your machine. Use CPU mode instead.")
 
-    if update_method in ['batch mu', 'online mu', 'batch hals', 'online hals']:
-        if beta_loss != 2 and update_method == 'online':
-            print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
-            update_method = 'batch'
+    if algo not in {'mu', 'hals', 'bpp'}:
+        raise ValueError("Parameter algo must be a valid value from ['mu', 'hals', 'bpp']!")
+    if mode not in {'batch', 'online'}:
+        raise ValueError("Parameter mode must be a valid value from ['batch', 'online']!")
+    if beta_loss != 2 and mode == 'online':
+        print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
+        mode = 'batch'
 
-        if update_method == 'batch mu':
-            model = NMFBatchMU(
-                n_components=n_components,
-                init=init,
-                beta_loss=beta_loss,
-                tol=tol,
-                random_state=random_state,
-                alpha_W=alpha_W,
-                l1_ratio_W=l1_ratio_W,
-                alpha_H=alpha_H,
-                l1_ratio_H=l1_ratio_H,
-                fp_precision=fp_precision,
-                device_type=device_type,
-                max_iter=max_iter,
-            )
-        elif update_method == 'online mu':
-            model = NMFOnlineMU(
-                n_components=n_components,
-                init=init,
-                beta_loss=beta_loss,
-                tol=tol,
-                random_state=random_state,
-                alpha_W=alpha_W,
-                l1_ratio_W=l1_ratio_W,
-                alpha_H=alpha_H,
-                l1_ratio_H=l1_ratio_H,
-                fp_precision=fp_precision,
-                device_type=device_type,
-                max_pass=online_max_pass,
-                chunk_size=online_chunk_size,
-            )
-        elif update_method == 'batch hals':
-            model = NMFBatchHALS(
-                n_components=n_components,
-                init=init,
-                beta_loss=beta_loss,
-                tol=tol,
-                random_state=random_state,
-                alpha_W=alpha_W,
-                l1_ratio_W=l1_ratio_W,
-                alpha_H=alpha_H,
-                l1_ratio_H=l1_ratio_H,
-                fp_precision=fp_precision,
-                device_type=device_type,
-                max_iter=max_iter,
-            )
+    model_class = None
+    kwargs = {'alpha_W': alpha_W, 'l1_ratio_W': l1_ratio_W, 'alpha_H': alpha_H, 'l1_ratio_H': l1_ratio_H, 'fp_precision': fp_precision, 'device_type': device_type}
+
+    if mode == 'batch':
+        kwargs['max_iter'] = batch_max_iter
+        if algo == 'mu':
+            model_class = NMFBatchMU
+        elif algo == 'hals':
+            model_class = NMFBatchHALS
+            kwargs['hals_tol'] = batch_hals_tol
+            kwargs['hals_max_iter'] = batch_hals_max_iter
         else:
-            model = NMFOnlineHALS(
+            model_class = NMFBatchNnlsBpp
+    else:
+        kwargs['max_pass'] = online_max_pass
+        kwargs['chunk_size'] = online_chunk_size
+        if algo == 'mu' or algo == 'hals':
+            kwargs['chunk_max_iter'] = online_chunk_max_iter
+            kwargs['h_tol'] = online_h_tol
+            kwargs['w_tol'] = online_w_tol
+            model_class = NMFOnlineMU if algo == 'mu' else NMFOnlineHALS
+        else:
+            model_class = NMFOnlineNnlsBpp
+
+    model = model_class(
                 n_components=n_components,
                 init=init,
                 beta_loss=beta_loss,
                 tol=tol,
                 random_state=random_state,
-                alpha_W=alpha_W,
-                l1_ratio_W=l1_ratio_W,
-                alpha_H=alpha_H,
-                l1_ratio_H=l1_ratio_H,
-                fp_precision=fp_precision,
-                device_type=device_type,
-                max_pass=online_max_pass,
-                chunk_size=online_chunk_size,
+                **kwargs            
             )
-
-    else:
-        raise ValueError("Parameter update_method must be a valid value from ['batch mu', 'online mu', 'batch hals', 'online hals']!")
 
     H = model.fit_transform(X)
     W = model.W
     err = model.reconstruction_err
-
 
     return H.cpu().numpy(), W.cpu().numpy(), err.cpu().numpy()

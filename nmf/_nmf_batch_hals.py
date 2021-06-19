@@ -8,7 +8,7 @@ class NMFBatchHALS(NMFBatchBase):
     def __init__(
         self,
         n_components: int,
-        init,
+        init: str,
         beta_loss: float,
         tol: float,
         random_state: int,
