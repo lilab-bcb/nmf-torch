@@ -3,6 +3,7 @@ import torch
 
 from typing import Union
 
+
 class NMFBase:
     def __init__(
         self,
@@ -141,7 +142,7 @@ class NMFBase:
         if not isinstance(X, torch.Tensor):
             if self._device_type == 'cpu' and ((self._device_type == torch.float32 and X.dtype == numpy.float32) or (self._device_type == torch.double and X.dtype == numpy.float64)):
                 X = torch.from_numpy(X)
-            else:    
+            else:
                 X = torch.tensor(X, dtype=self._tensor_dtype, device=self._device_type)
         else:
             if self._device_type != 'cpu' and (not X.is_cuda):

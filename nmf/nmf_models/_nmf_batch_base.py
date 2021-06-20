@@ -3,6 +3,7 @@ import torch
 from ._nmf_base import NMFBase
 from typing import Union
 
+
 class NMFBatchBase(NMFBase):
     def __init__(
         self,

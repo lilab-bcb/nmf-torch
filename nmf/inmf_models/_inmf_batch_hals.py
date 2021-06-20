@@ -3,19 +3,20 @@ import torch
 from ._inmf_batch_base import INMFBatchBase
 from typing import List, Union
 
+
 class INMFBatchHALS(INMFBatchBase):
     def __init__(
         self,
         n_components: int,
-        lam: float = 5.,
-        init: str = 'random',
-        tol: float = 1e-4,
-        random_state: int = 0,
-        fp_precision: Union[str, torch.dtype] = 'float',
-        device_type: str = 'cpu',
-        max_iter: int = 200,
-        hals_tol: float = 0.0008,
-        hals_max_iter: int = 200,
+        lam: float,
+        init: str,
+        tol: float,
+        random_state: int,
+        fp_precision: Union[str, torch.dtype],
+        device_type: str,
+        max_iter: int,
+        hals_tol: float,
+        hals_max_iter: int,
     ):
         super().__init__(
             n_components=n_components,
@@ -27,7 +28,7 @@ class INMFBatchHALS(INMFBatchBase):
             device_type=device_type,
             max_iter=max_iter,
         )
-        
+
         self._zero = torch.tensor(0.0, dtype=self._tensor_dtype, device=self._device_type)
         self._hals_tol = hals_tol
         self._hals_max_iter = hals_max_iter

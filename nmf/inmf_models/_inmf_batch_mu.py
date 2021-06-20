@@ -1,40 +1,40 @@
 import torch
 
 from ._inmf_batch_base import INMFBatchBase
-from ._nnls_bpp import nnls_bpp
-from typing import List, Union
+from typing import List
 
 
-class INMFBatchNnlsBpp(INMFBatchBase):
+class INMFBatchMU(INMFBatchBase):
+    def _update_matrix(self, mat, numer, denom):
+        mat *= (numer / denom)
+        mat[denom < self._epsilon] = 0.0
+
+
     def _update_H_V_W(self):
         W_numer = torch.zeros_like(self.W)
-        W_denom = torch.zeros_like(self._HTH[0])
-        # Update Hs and Vs and calculate terms for updating W
+        W_denom = torch.zeros_like(self.W)
+        # Update Hs and Vs and calculate partials sum for updating W
         for k in range(self._n_batches):
             # Update H[k]
-            if self._lambda > 0.0:
-                n_iter = nnls_bpp(self._WVWVT[k] + self._lambda * self._VVT[k], self._XWVT[k].T, self.H[k].T, self._device_type)
-            else:
-                n_iter = nnls_bpp(self._WVWVT[k], self._XWVT[k].T, self.H[k].T, self._device_type)
-            # print(f"Batch {k} H n_iter={n_iter}.")
+            H_numer = self._XWVT[k]
+            H_denom = self.H[k] @ (self._WVWVT[k] + self._lambda * self._VVT[k]) if self._lambda > 0.0 else self.H[k] @ self._WVWVT[k]
+            self._update_matrix(self.H[k], H_numer, H_denom)
             # Cache HTH
             self._HTH[k] = self.H[k].T @ self.H[k]
 
             # Update V[k]
-            HTX = self.H[k].T @ self.X[k]
-            n_iter = nnls_bpp(self._HTH[k] * (1.0 + self._lambda), HTX - self._HTH[k] @ self.W, self.V[k], self._device_type)
-            # print(f"Batch {k} V n_iter={n_iter}.")
+            V_numer = self.H[k].T @ self.X[k]
+            V_denom = self._HTH[k] @ (self.W + (1.0 + self._lambda) * self.V[k])
+            self._update_matrix(self.V[k], V_numer, V_denom)
             # Cache VVT
             if self._lambda > 0.0:
                 self._VVT[k] = self.V[k] @ self.V[k].T
 
             # Update W numer and denomer
-            W_numer += (HTX - self._HTH[k] @ self.V[k])
-            W_denom += self._HTH[k]
-
+            W_numer += V_numer
+            W_denom += self._HTH[k] @ (self.W + self.V[k])
         # Update W
-        n_iter = nnls_bpp(W_denom, W_numer, self.W, self._device_type)
-        # print(f"W n_iter={n_iter}.")
+        self._update_matrix(self.W, W_numer, W_denom)
         # Cache WVWVT and XWVT
         for k in range(self._n_batches):
             WV = self.W + self.V[k]

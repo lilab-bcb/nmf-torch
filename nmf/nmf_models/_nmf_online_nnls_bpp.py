@@ -1,7 +1,7 @@
 import torch
 
 from ._nmf_online_base import NMFOnlineBase
-from ._nnls_bpp import nnls_bpp
+from ..utils import nnls_bpp
 from typing import Union
 
 

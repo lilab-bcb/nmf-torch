@@ -1,10 +1,52 @@
 import torch
 
 from ._inmf_online_base import INMFOnlineBase
-from ._nnls_bpp import nnls_bpp
 from typing import List, Union
 
-class INMFOnlineNnlsBpp(INMFOnlineBase):
+
+class INMFOnlineMU(INMFOnlineBase):
+    def __init__(
+        self,
+        n_components: int,
+        lam: float,
+        init: str,
+        tol: float,
+        random_state: int,
+        fp_precision: Union[str, torch.dtype],
+        device_type: str,
+        max_pass: int,
+        chunk_size: int,
+        chunk_max_iter: int,
+        h_tol: float,
+        v_tol: float,
+        w_tol: float,
+    ):
+        super().__init__(
+            n_components=n_components,
+            lam=lam,
+            init=init,
+            tol=tol,
+            random_state=random_state,
+            fp_precision=fp_precision,
+            device_type=device_type,
+            max_pass=max_pass,
+            chunk_size=chunk_size,
+        )
+
+        self._chunk_max_iter = chunk_max_iter
+        self._h_tol = h_tol
+        self._v_tol = v_tol
+        self._w_tol = w_tol
+
+
+    def _update_matrix(self, mat, numer, denom):
+        rates = numer / denom
+        rates[denom < self._epsilon] = 0.0
+        cur_max = (torch.abs(1.0 - rates) * mat).max()
+        mat *= rates
+        return cur_max
+
+
     def _update_one_pass(self):
         """
             A = sum hth; B = sum htx; for each batch
@@ -35,11 +77,13 @@ class INMFOnlineNnlsBpp(INMFOnlineBase):
                 VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
                 xWVT = x @ WV.T
 
-                if self._lambda > 0.0:
-                    n_iter = nnls_bpp(WVWVT + self._lambda * VVT, xWVT.T, h.T, self._device_type)
-                else:
-                    n_iter = nnls_bpp(WVWVT, xWVT.T, h.T, self._device_type)
-                # print(f"Batch {k} Block {i} H n_iter={n_iter}.")
+                h_factor_numer = xWVT
+                for j in range(self._chunk_max_iter):
+                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
+                    cur_max = self._update_matrix(h, h_factor_numer, h_factor_denom)
+                    if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
+                        break
+                # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")
                 self.H[k][idx, :] = h
 
                 # Update sufficient statistics for batch k
@@ -49,8 +93,14 @@ class INMFOnlineNnlsBpp(INMFOnlineBase):
                 B += htx
 
                 # Update V
-                n_iter = nnls_bpp(A * (1.0 + self._lambda), B - A @ self.W, self.V[k], self._device_type)
-                # print(f"Batch {k} Block {i} V n_iter={n_iter}.")
+                V_factor_numer = B
+                for j in range(self._chunk_max_iter):
+                    V_factor_denom = A @ (WV + self._lambda * self.V[k])
+                    cur_max = self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
+                    WV = self.W + self.V[k]
+                    if j + 1 < self._chunk_max_iter and cur_max / self.V[k].mean() < self._v_tol:
+                        break
+                # print(f"Batch {k} Block {i} update V iterates {j+1} iterations.")
 
                 # Update sufficient statistics for all batches
                 C += hth
@@ -58,9 +108,13 @@ class INMFOnlineNnlsBpp(INMFOnlineBase):
                 E_new = E + A @ self.V[k]
 
                 # Update W
-                n_iter = nnls_bpp(C, D - E_new, self.W, self._device_type)
-                # print(f"Batch {k} Block {i} W n_iter={n_iter}.")
-
+                W_factor_numer = D
+                for j in range(self._chunk_max_iter):
+                    W_factor_denom = C @ self.W + E_new
+                    cur_max = self._update_matrix(self.W, W_factor_numer, W_factor_denom)
+                    if j + 1 < self._chunk_max_iter and cur_max / self.W.mean() < self._w_tol:
+                        break
+                # print(f"Batch {k} Block {i} update W iterates {j+1} iterations.")
                 i += self._chunk_size
             E = E_new
 
@@ -91,11 +145,13 @@ class INMFOnlineNnlsBpp(INMFOnlineBase):
                 VVT = self.V[k] @ self.V[k].T if self._lambda > 0.0 else None
                 xWVT = x @ WV.T
 
-                if self._lambda > 0.0:
-                    n_iter = nnls_bpp(WVWVT + self._lambda * VVT, xWVT.T, h.T, self._device_type)
-                else:
-                    n_iter = nnls_bpp(WVWVT, xWVT.T, h.T, self._device_type)
-                # print(f"Batch {k} Block {i} H n_iter={n_iter}.")
+                h_factor_numer = xWVT
+                for j in range(self._chunk_max_iter):
+                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
+                    cur_max = self._update_matrix(h, h_factor_numer, h_factor_denom)
+                    if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
+                        break
+                # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")
                 self.H[k][idx, :] = h
 
                 # Update sufficient statistics for batch k
@@ -105,9 +161,14 @@ class INMFOnlineNnlsBpp(INMFOnlineBase):
                 B += htx
 
                 # Update V
-                n_iter = nnls_bpp(A * (1.0 + self._lambda), B - A @ self.W, self.V[k], self._device_type)
-                # print(f"Batch {k} Block {i} V n_iter={n_iter}.")
-
+                V_factor_numer = B
+                for j in range(self._chunk_max_iter):
+                    V_factor_denom = A @ (WV + self._lambda * self.V[k])
+                    cur_max = self._update_matrix(self.V[k], V_factor_numer, V_factor_denom)
+                    WV = self.W + self.V[k]
+                    if j + 1 < self._chunk_max_iter and cur_max / self.V[k].mean() < self._v_tol:
+                        break
+                # print(f"Batch {k} Block {i} update V iterates {j+1} iterations.")
                 i += self._chunk_size
 
 
@@ -126,11 +187,13 @@ class INMFOnlineNnlsBpp(INMFOnlineBase):
 
                 # Update H
                 xWVT = x @ WV.T
-                if self._lambda > 0.0:
-                    n_iter = nnls_bpp(WVWVT + self._lambda * VVT, xWVT.T, h.T, self._device_type)
-                else:
-                    n_iter = nnls_bpp(WVWVT, xWVT.T, h.T, self._device_type)
-                # print(f"Batch {k} Block {i} H n_iter={n_iter}.")
+                h_factor_numer = xWVT
+                for j in range(self._chunk_max_iter):
+                    h_factor_denom = h @ (WVWVT + self._lambda * VVT) if self._lambda > 0.0 else h @ WVWVT
+                    cur_max = self._update_matrix(h, h_factor_numer, h_factor_denom)
+                    if j + 1 < self._chunk_max_iter and cur_max / h.mean() < self._h_tol:
+                            break
+                # print(f"Batch {k} Block {i} update H iterates {j+1} iterations.")
 
                 hth = h.T @ h
                 sum_h_err += self._h_err(h, hth, WVWVT, xWVT, VVT)
