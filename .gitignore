@@ -1,4 +1,8 @@
 *~
 *.pdf
 *.npy
+ext_modules/*.c
+ext_modules/*.cpp
+nmf/cylib/*.so
 __pycache__/
+build/

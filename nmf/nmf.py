@@ -1,465 +1,364 @@
 import numpy as np
 import torch
-from typing import Optional, Union
+from typing import List, Union, Tuple, Optional
 
-class NMF:
-    def __init__(
-        self,
-        n_components: int,
-        init: str = "nndsvdar",
-        beta_loss: Union[str, float] = "frobenius",
-        update_method: str = "batch",
-        max_iter: int = 200,
-        tol: float = 1e-4,
-        random_state: int = 0,
-        alpha_W: float = 0.0,
-        l1_ratio_W: float = 0.0,
-        alpha_H:float = 0.0,
-        l1_ratio_H:float = 0.0,
-        fp_precision: str = 'float',
-        online_chunk_size: int = 2000,
-        online_w_max_iter: int = 200,
-        online_h_max_iter: int = 50,
-        use_gpu: bool = False,
-    ):
-        self.k = n_components
+from .nmf_models import NMFBatchMU, NMFBatchHALS, NMFBatchNnlsBpp, NMFOnlineMU, NMFOnlineHALS, NMFOnlineNnlsBpp
+from .inmf_models import INMFBatchHALS, INMFBatchMU, INMFBatchNnlsBpp, INMFOnlineHALS, INMFOnlineMU, INMFOnlineNnlsBpp
 
-        if beta_loss == 'frobenius':
-            self._beta = 2
-        elif beta_loss == 'kullback-leibler':
-            self._beta = 1
-        elif beta_loss == 'itakura-saito':
-            self._beta = 0
-        elif isinstance(beta_loss, int) or isinstance(beta_loss, float):
-            self._beta = beta_loss
+def run_nmf(
+    X: Union[np.array, torch.tensor],
+    n_components: int,
+    init: str = "nndsvdar",
+    beta_loss: Union[str, float] = "frobenius",
+    algo: str = "hals",
+    mode: str = "batch",
+    tol: float = 1e-4,
+    n_jobs: int = -1,
+    random_state: int = 0,
+    use_gpu: bool = False,
+    alpha_W: float = 0.0,
+    l1_ratio_W: float = 0.0,
+    alpha_H: float = 0.0,
+    l1_ratio_H: float = 0.0,
+    fp_precision: Union[str, torch.dtype] = "float",
+    batch_max_iter: int = 500,
+    batch_hals_tol: float = 0.05,
+    batch_hals_max_iter: int = 200,
+    online_max_pass: int = 20,
+    online_chunk_size: int = 5000,
+    online_chunk_max_iter: int = 200,
+    online_h_tol: float = 0.05,
+    online_w_tol: float = 0.05,
+) -> Tuple[np.array, np.array, float]:
+    """
+    Perform Non-negative Matrix Factorization (NMF).
+
+    Decompose a non-negative matrix X into an approximation of the product of two matrices H and W of smaller ranks.
+    It is useful for dimension reduction, topic modeling, gene program extraction in Genomics, etc.
+
+    The objective function is
+
+        .. math::
+
+            ||X - HW||_{beta} + alpha_H * l1_{ratio, H} * ||vec(H)||_1
+
+            + 0.5 * alpha_H * (1 - l1_{ratio, H}) * ||H||_{Fro}^2
+
+            + alpha_W * l1_{ratio, W} * ||vec(W)||_1
+
+            + 0.5 * alpha_W * (1 - l1_{ratio, W}) * ||W||_{Fro}^2
+
+    where
+
+    :math:`||A||_{beta} = \\frac{1}{beta * (beta - 1)} \\sum_{i, j} X_{ij}^{beta} - beta * X_{ij} * Y_{ij}^{beta - 1} + (beta - 1) * Y_{ij}^{beta}` (Beta divergence)
+
+    :math:`||vec(A)||_1 = \\sum_{i, j} abs(A_{ij})` (Element-wise L1 norm)
+
+    :math:`||A||_{Fro}^2 = \\sum_{i, j} A_{ij}^2` (Frobenius norm)
+
+    NMF uses various solvers (specified in ``algo`` parameter), in either batch or online mode (specified in ``mode`` parameter), to minimize this objective function.
+
+    Parameters
+    ----------
+
+    X: ``numpy.array`` or ``torch.tensor``
+        The input non-negative matrix of shape (n_samples, n_features).
+    n_components: ``int``
+        Number of components.
+    init: ``str``, optional, default: ``nndsvdar``
+        Method for initialization on H and W matrices. Available options are: ``random``, ``nndsvd``, ``nndsvda``, ``nndsvdar``.
+    beta_loss: ``str`` or ``float``
+        Beta loss between the given matrix X and its approximation calculated by HW, which is used as the metric to be minimized during the computation.
+        It can be a string from options:
+            - ``frobenius``: L2 distance, same as ``beta_loss=2.0``.
+            - ``kullback-leibler``:KL divergence, same as ``beta_loss=1.0``.
+            - ``itakura-saito``: Itakura-Saito divergence, same as ``beta_loss=0``.
+        Alternatively, it can also be a float number, which gives the beta parameter of the beta loss to be used.
+    algo: ``str``, optional, default: ``hals``
+        Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+    mode: ``str``, optional, default: ``batch``
+        Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``. For other beta loss, it switches back to ``batch`` method.
+    tol: ``float``, optional, default: ``1e-4``
+        The toleration used for convergence check.
+    n_jobs: ``int``, optional, default: ``-1``
+        Number of cpu threads to use. If -1, use PyTorch's default setting.
+    random_state: ``int``, optional, default: ``0``
+        The random state used for reproducibility on the results.
+    use_gpu: ``bool``, optional, default: ``False``
+        If ``True``, use GPU if available. Otherwise, use CPU only.
+    alpha_W: ``float``, optional, default: ``0.0``
+        A numeric scale factor which multiplies the regularization terms related to W.
+        If zero or negative, no regularization regarding W is considered.
+    l1_ratio_W: ``float``, optional, default: ``0.0``
+        The ratio of L1 penalty on W, must be between 0 and 1. And thus the ratio of L2 penalty on W is (1 - l1_ratio_W).
+    alpha_H: ``float``, optional, default: ``0.0``
+        A numeric scale factor which multiplies the regularization terms related to H.
+        If zero or negative, no regularization regarding H is considered.
+    l1_ratio_H: ``float``, optional, default: ``0.0``
+        The ratio of L1 penalty on W, must be between 0 and 1. And thus the ratio of L2 penalty on H is (1 - l1_ratio_H).
+    fp_precision: ``str``, optional, default: ``float``
+        The numeric precision on the results.
+        If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
+        Alternatively, choose Pytorch's `torch dtype <https://pytorch.org/docs/stable/tensor_attributes.html>`_ of your own.
+    batch_max_iter: ``int``, optional, default: ``500``
+        The maximum number of iterations to perform for batch learning.
+    batch_hals_tol: ``float``, optional, default: ``0.05``
+        For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
+    batch_hals_max_iter: ``int``, optional, default: ``200``
+        Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS.
+    online_max_pass: ``int``, optional, default: ``20``
+        The maximum number of online passes of all data to perform.
+    online_chunk_size: ``int``, optional, default: ``5000``
+        The chunk / mini-batch size for online learning.
+    online_chunk_max_iter: ``int``, optional, default: ``200``
+        The maximum number of iterations for updating H or W in online learning.
+    online_h_tol: ``float``, optional, default: 0.05
+        The tolerance for updating H in each chunk in online learning.
+    online_w_tol: ``float``, optional, default: 0.05
+        The tolerance for updating W in each chunk in online learning.
+
+    Returns
+    -------
+    H: ``numpy.array``
+        One of the resulting decomposed matrix of shape (n_samples, n_components). It represents the transformed coordinates of samples regarding components.
+    W: ``numpy.array``
+        The other resulting decomposed matrix of shape (n_components, n_features). It represents the composition of each component in terms of features.
+    reconstruction_error: ``float``
+        The Beta Loss between the origin matrix X and its approximation HW after NMF.
+
+    Examples
+    --------
+    >>> H, W, err = run_nmf(X, n_components=20)
+    >>> H, W, err = run_nmf(X, n_components=20, init='random', algo='mu', mode='online')
+    """
+    if beta_loss == 'frobenius':
+        beta_loss = 2
+    elif beta_loss == 'kullback-leibler':
+        beta_loss = 1
+    elif beta_loss == 'itakura-saito':
+        beta_loss = 0
+    elif not (isinstance(beta_loss, int) or isinstance(beta_loss, float)):
+        raise ValueError("beta_loss must be a valid value: either from ['frobenius', 'kullback-leibler', 'itakura-saito'], or a numeric value.")
+
+    device_type = 'cpu'
+    if use_gpu:
+        if torch.cuda.is_available():
+            device_type = 'cuda'
+            print("Use GPU mode.")
         else:
-            raise ValueError("beta_loss must be a valid value: either from ['frobenius', 'kullback-leibler', 'itakura-saito'], or a numeric value.")
+            print("CUDA is not available on your machine. Use CPU mode instead.")
 
-        if update_method in ['online', 'batch']:
-            self._update_method = update_method
+    if algo not in {'mu', 'hals', 'bpp'}:
+        raise ValueError("Parameter algo must be a valid value from ['mu', 'hals', 'bpp']!")
+    if mode not in {'batch', 'online'}:
+        raise ValueError("Parameter mode must be a valid value from ['batch', 'online']!")
+    if beta_loss != 2 and mode == 'online':
+        print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
+        mode = 'batch'
+
+    model_class = None
+    kwargs = {'alpha_W': alpha_W, 'l1_ratio_W': l1_ratio_W, 'alpha_H': alpha_H, 'l1_ratio_H': l1_ratio_H, 'fp_precision': fp_precision, 'device_type': device_type}
+
+    if mode == 'batch':
+        kwargs['max_iter'] = batch_max_iter
+        if algo == 'mu':
+            model_class = NMFBatchMU
+        elif algo == 'hals':
+            model_class = NMFBatchHALS
+            kwargs['hals_tol'] = batch_hals_tol
+            kwargs['hals_max_iter'] = batch_hals_max_iter
         else:
-            raise ValueError("method must be a valid value from ['online', 'batch'].")
-
-        self._l1_reg_H = alpha_H * l1_ratio_H
-        self._l2_reg_H = alpha_H * (1 - l1_ratio_H)
-        self._l1_reg_W = alpha_W * l1_ratio_W
-        self._l2_reg_W = alpha_W * (1 - l1_ratio_W)
-
-        if (self._beta > 1 and self._beta < 2) and (self._l1_reg_H > 0 or self._l1_reg_W > 0):
-            print("L1 norm doesn't have a closed form solution when 1 < beta < 2. Ignore L1 regularization.")
-            self._l1_reg_H = 0
-            self._l1_reg_W = 0
-
-        if self._beta != 2 and (self._l2_reg_H > 0 or self._l2_reg_W > 0):
-            print("L2 norm doesn't have a closed form solution when beta != 2. Ignore L2 regularization.")
-            self._l2_reg_H = 0
-            self._l2_reg_W = 0
-
-        if fp_precision == 'float':
-            self._tensor_dtype = torch.float
-        elif fp_precision == 'double':
-            self._tensor_dtype = torch.double
+            model_class = NMFBatchNnlsBpp
+    else:
+        kwargs['max_pass'] = online_max_pass
+        kwargs['chunk_size'] = online_chunk_size
+        if algo == 'mu' or algo == 'hals':
+            kwargs['chunk_max_iter'] = online_chunk_max_iter
+            kwargs['h_tol'] = online_h_tol
+            kwargs['w_tol'] = online_w_tol
+            model_class = NMFOnlineMU if algo == 'mu' else NMFOnlineHALS
         else:
-            self._tensor_dtype = fp_precision
+            model_class = NMFOnlineNnlsBpp
 
-        self._epsilon = 1e-20
-        self._chunk_size = online_chunk_size
-        self._w_max_iter = online_w_max_iter
-        self._h_max_iter = online_h_max_iter
+    model = model_class(
+                n_components=n_components,
+                init=init,
+                beta_loss=beta_loss,
+                tol=tol,
+                n_jobs=n_jobs,
+                random_state=random_state,
+                **kwargs
+            )
 
-        self._device_type = 'cpu'
-        if use_gpu:
-            if torch.cuda.is_available():
-                self._device_type = 'cuda'
-                print("Use GPU mode.")
-            else:
-                print("CUDA is not available on your machine. Use CPU mode instead.")
+    H = model.fit_transform(X)
+    W = model.W
+    err = model.reconstruction_err
 
-        self._init_method = init
-        self._max_iter = max_iter
-        self._tol = tol
-        self._random_state = random_state
+    return H.cpu().numpy(), W.cpu().numpy(), err.cpu().numpy()
 
-    @property
-    def reconstruction_err(self):
-        return self._cur_err
 
-    def _get_regularization_loss(self, mat, l1_reg, l2_reg):
-        res = 0.
-        if l1_reg > 0:
-            res += l1_reg * mat.norm(p=1)
-        if l2_reg > 0:
-            res += l2_reg * mat.norm(p=2)**2 / 2
-        return res
+def integrative_nmf(
+    X: List[Union[np.array, torch.tensor]],
+    n_components: int,
+    init: Optional[str] = None,
+    algo: str = "hals",
+    mode: str = "batch",
+    tol: float = 1e-4,
+    n_jobs: int = -1,
+    random_state: int = 0,
+    use_gpu: bool = False,
+    lam: float = 5.,
+    fp_precision: Union[str, torch.dtype] = "float",
+    batch_max_iter: int = 200,
+    batch_hals_tol: float = 0.0008,
+    batch_hals_max_iter: int = 200,
+    online_max_pass: int = 20,
+    online_chunk_size: int = 5000,
+    online_chunk_max_iter: int = 200,
+    online_h_tol: float = 0.01,
+    online_v_tol: float = 0.1,
+    online_w_tol: float = 0.01,
+) -> Tuple[List[np.array], np.array, List[np.array], float]:
+    """
+    Run integrative Non-negative Matrix Factorization (iNMF).
 
-    def _loss(self, square_root=False):
-        if self._beta == 2:
-            res = torch.trace(self._WWT @ self._HTH) / 2 - torch.trace(self._H_t @ self._XWT) + self._X_SS_half
-        elif self._beta == 0 or self._beta == 1:
-            Y = self._get_HW()
-            X_flat = self.X.flatten()
-            Y_flat = Y.flatten()
+    Given a list of non-negative matrices X, perform integration using NMF.
+    It is useful for data integration, gene program extraction in Genomics, etc.
 
-            idx = X_flat > self._epsilon
-            X_flat = X_flat[idx]
-            Y_flat = Y_flat[idx]
+    The objective function is
 
-            # Avoid division by zero
-            Y_flat[Y_flat == 0] = self._epsilon
+        .. math::
 
-            x_div_y = X_flat / Y_flat
-            if self._beta == 0:
-                res = x_div_y.sum() - x_div_y.log().sum() - self.X.shape.numel()
-            else:
-                res = X_flat @ x_div_y.log() - X_flat.sum() + Y.sum()
+            \\sum_{k}||X_k - H_k(W+V_k)||_{Fro}^2 + \\lambda * \\sum_{k}||H_kV_k||_{Fro}^2
+
+    where
+
+    :math:`||A||_{Fro}^2 = \\sum_{i, j} A_{ij}^2` (Frobenius norm)
+
+    iNMF uses various solvers (specified in ``algo`` parameter), either in batch or online mode (specified in ``mode`` parameter), to minimize this objective function.
+
+    Parameters
+    ----------
+
+    X: List of ``numpy.array`` or ``torch.tensor``
+        The input list of non-negative matrices of shape (n_samples_i, n_features), one per batch. The n_samples_i is number of samples in batch i, and all batches must have the same number of features.
+    n_components: ``int``
+        Number of components achieved after iNMF.
+    init: ``str``, optional, default: ``None``
+        Method for initialization on H, W, and V matrices. Available options are: ``norm``, ``uniform``, meaning using random numbers generated from Normal or Uniform distribution.
+        If ``None``, use ``norm`` for online mode, while ``uniform`` for batch mode, in order to achieve best performance.
+    algo: ``str``, optional, default: ``hals``
+        Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+    mode: ``str``, optional, default: ``batch``
+        Learning mode. Choose from ``batch`` and ``online``.
+    tol: ``float``, optional, default: ``1e-4``
+        The toleration used for convergence check.
+    n_jobs: ``int``, optional, default: ``-1``
+        Number of cpu threads to use. If -1, use PyTorch's default setting.
+    random_state: ``int``, optional, default: ``0``
+        The random state used for reproducibility on the results.
+    use_gpu: ``bool``, optional, default: ``False``
+        If ``True``, use GPU if available. Otherwise, use CPU only.
+    lam: ``float``, optional, default: ``5.0``
+        The coefficient for regularization terms. If ``0``, then no regularization will be performed.
+    fp_precision: ``str``, optional, default: ``float``
+        The numeric precision on the results.
+        If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
+        Alternatively, choose Pytorch's `torch dtype <https://pytorch.org/docs/stable/tensor_attributes.html>`_ of your own.
+    batch_max_iter: ``int``, optional, default: ``200``
+        The maximum number of iterations to perform for batch learning.
+    batch_hals_tol: ``float``, optional, default: ``0.0008``
+        For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update V and W similarly.
+    batch_hals_max_iter: ``int``, optional, default: ``200``
+        Maximal iterations of updating H, V, and W for mimic BPP. If this parameter set to 1, it is the standard HALS.
+    online_max_pass: ``int``, optional, default: ``20``
+        The maximum number of online passes of all data to perform.
+    online_chunk_size: ``int``, optional, default: ``5000``
+        The chunk / mini-batch size for online learning.
+    online_chunk_max_iter: ``int``, optional, default: ``200``
+        The maximum number of iterations for updating H or W in online learning.
+    online_h_tol: ``float``, optional, default: ``0.01``
+        The tolerance for updating H in each chunk in online learning.
+    online_v_tol: ``float``, optional, default: ``0.1``
+        The tolerance for updating V in each chunk in online learning.
+    online_w_tol: ``float``, optional, default: ``0.01``
+        The tolerance for updating W in each chunk in online learning.
+
+    Returns
+    -------
+    H: List of ``numpy.array``
+        List of the resulting decomposed matrices of shape (n_samples_i, n_components), where n_samples_i is the number of samples in batch i.
+        Each matrix represents the transformed coordinates of samples regarding components of the corresponding batch.
+    W: ``numpy.array``
+        The resulting decomposed matrix of shape (n_components, n_features), which represents the shared information across the given batches in terms of features.
+    V: List of ``numpy.array``
+        List of the resulting decomposed matrices of shape (n_components, n_features).
+        Each matrix represents the batch-specific information in terms of features of the corresponding batch.
+    reconstruction_error: ``float``
+        The L2 Loss between the origin matrices X and their approximation after iNMF.
+
+    Examples
+    --------
+    >>> H, W, V, err = integrative_nmf(X, n_components=20)
+    >>> H, W, V, err = integrative_nmf(X, n_components=20, algo='bpp', mode='online')
+    """
+
+    device_type = 'cpu'
+    if use_gpu:
+        if torch.cuda.is_available():
+            device_type = 'cuda'
+            print("Use GPU mode.")
         else:
-            Y = self._get_HW()
-            res = torch.sum(self.X.pow(self._beta) - self._beta * self.X * Y.pow(self._beta - 1) + (self._beta - 1) * Y.pow(self._beta))
-            res /= (self._beta * (self._beta - 1))
+            print("CUDA is not available on your machine. Use CPU mode instead.")
 
-        # Add regularization terms.
-        res += self._get_regularization_loss(self.H, self._l1_reg_H, self._l2_reg_H)
-        res += self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)
+    if algo not in {'hals', 'mu', 'bpp'}:
+        raise ValueError("Parameter algo must be a valid value from ['hals', 'mu', 'bpp']!")
+    if mode not in {'batch', 'online'}:
+        raise ValueError("Parameter mode must be a valid value from ['batch', 'online']!")
 
-        if square_root:
-            return torch.sqrt(2 * res)
+    if init is None:
+        init = 'norm' if mode == 'online' else 'uniform'
+
+    model_class = None
+    kwargs = {'device_type': device_type, 'lam': lam, 'fp_precision': fp_precision}
+
+    if mode == 'batch':
+        kwargs['max_iter'] = batch_max_iter
+        if algo == 'hals':
+            model_class = INMFBatchHALS
+            kwargs['hals_tol'] = batch_hals_tol
+            kwargs['hals_max_iter'] = batch_hals_max_iter
+        elif algo == 'bpp':
+            model_class = INMFBatchNnlsBpp
         else:
-            return res
-
-    def _is_converged(self, prev_err, cur_err, init_err):
-        if torch.abs((prev_err - cur_err) / init_err) < self._tol:
-            return True
+            model_class = INMFBatchMU
+    else:
+        kwargs['max_pass'] = online_max_pass
+        kwargs['chunk_size'] = online_chunk_size
+        if algo == 'bpp':
+            model_class = INMFOnlineNnlsBpp
         else:
-            return False
-
-    def _get_HW(self):
-        return self.H @ self.W
-
-    def _initialize_H_W(self, eps=1e-6):
-        n_samples, n_features = self.X.shape
-        if self._init_method is None:
-            if self.k < min(n_samples, n_features):
-                self._init_method = 'nndsvdar'
-            else:
-                self._init_method = 'random'
-
-        if self._init_method in ['nndsvd', 'nndsvda', 'nndsvdar']:
-            U, S, V = torch.svd_lowrank(self.X, q=self.k)
-
-            H= torch.zeros_like(U, dtype=self._tensor_dtype, device=self._device_type)
-            W = torch.zeros_like(V.T, dtype=self._tensor_dtype, device=self._device_type)
-            H[:, 0] = S[0].sqrt() * U[:, 0]
-            W[0, :] = S[0].sqrt() * V[:, 0]
-
-            for j in range(2, self.k):
-                x, y = U[:, j], V[:, j]
-                x_p, y_p = x.maximum(torch.zeros_like(x, device=self._device_type)), y.maximum(torch.zeros_like(y, device=self._device_type))
-                x_n, y_n = x.minimum(torch.zeros_like(x, device=self._device_type)).abs(), y.minimum(torch.zeros_like(y, device=self._device_type)).abs()
-                x_p_nrm, y_p_nrm = x_p.norm(p=2), y_p.norm(p=2)
-                x_n_nrm, y_n_nrm = x_n.norm(p=2), y_n.norm(p=2)
-                m_p, m_n = x_p_nrm * y_p_nrm, x_n_nrm * y_n_nrm
-
-                if m_p > m_n:
-                    u, v, sigma = x_p / x_p_nrm, y_p / y_p_nrm, m_p
-                else:
-                    u, v, sigma = x_n / x_n_nrm, y_n / y_n_nrm, m_n
-
-                factor = (S[j] * sigma).sqrt()
-                H[:, j] = factor * u
-                W[j, :] = factor * v
-
-            H[H < eps] = 0
-            W[W < eps] = 0
-
-            if self._init_method == 'nndsvda':
-                avg = self.X.mean()
-                H[H == 0] = avg
-                W[W == 0] = avg
-            elif self._init_method == 'nndsvdar':
-                avg = self.X.mean()
-                H[H == 0] = avg / 100 * torch.rand(H[H==0].shape, dtype=self._tensor_dtype, device=self._device_type)
-                W[W == 0] = avg / 100 * torch.rand(W[W==0].shape, dtype=self._tensor_dtype, device=self._device_type)
-        elif self._init_method == 'random':
-            avg = torch.sqrt(self.X.mean() / self.k)
-            H = torch.abs(avg * torch.randn((self.X.shape[0], self.k), dtype=self._tensor_dtype, device=self._device_type))
-            W = torch.abs(avg * torch.randn((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type))
-        else:
-            raise ValueError(f"Invalid init parameter. Got {self._init_method}, but require one of (None, 'nndsvd', 'nndsvda', 'nndsvdar', 'random').")
-
-        self.H = H
-        self.W = W
-
-        if self._beta == 2:
-            self._W_t = self.W.T
-            self._WWT = self.W @ self._W_t
-            self._H_t = self.H.T
-            self._HTH = self._H_t @ self.H
-            self._XWT = self.X @ self._W_t
-
-        self._init_err = self._loss(square_root=True)
-        self._prev_err = self._init_err
-
-    def _add_regularization_terms(self, mat, numer_mat, denom_mat, l1_reg, l2_reg):
-        if l1_reg > 0:
-            if self._beta <= 1:
-                denom_mat += l1_reg
-            else:
-                numer_mat -= l1_reg
-                numer_mat[numer_mat < 0] = 0
-
-        if l2_reg > 0:
-            denom_mat += l2_reg * mat
-
-    def _W_err(self, A, B, l1_reg_W, l2_reg_W, W_t=None, WWT=None):
-        if W_t is None:
-            W_t = self.W.T
-        if WWT is None:
-            WWT = self.W @ W_t
-
-        res = torch.trace(WWT @ A) / 2.0 - torch.trace(B @ W_t)
-        # Add regularization terms if needed
-        if l1_reg_W > 0.0:
-            res += l1_reg_W * self.W.norm(p=1)
-        if l2_reg_W > 0.0:
-            res += l2_reg_W * torch.trace(WWT) / 2.0
-        return res
-
-    def _h_err(self, h, WWT, xWT, cache_arr = None):
-        h_t = h.T
-        hth = h_t @ h
-        if cache_arr is not None:
-            cache_arr[0] = h_t
-            cache_arr[1] = hth
-        # Forbenious-norm^2 in trace format (No X) 
-        res = torch.trace(WWT @ hth) / 2.0 - torch.trace(h_t @ xWT)
-        # Add regularization terms if needed
-        if self._l1_reg_H > 0.0:
-            res += self._l1_reg_H * h_t.norm(p=1)
-        if self._l2_reg_H > 0.0:
-            res += self._l2_reg_H * torch.trace(hth) / 2.0
-        return res
-
-    def _update_matrix(self, mat, numer, denom):
-        mat *= (numer / denom)
-        mat[denom < self._epsilon] = 0.0
-
-    def _online_update_one_pass(self, l1_reg_W, l2_reg_W):
-        indices = torch.randperm(self.X.shape[0], device=self._device_type)
-        A = torch.zeros((self.k, self.k), dtype=self._tensor_dtype, device=self._device_type)
-        B = torch.zeros((self.k, self.X.shape[1]), dtype=self._tensor_dtype, device=self._device_type)
-
-        i = 0
-        num_processed = 0
-        while i < indices.shape[0]:
-            idx = indices[i:(i+self._chunk_size)]
-            cur_chunksize = idx.shape[0]
-            x = self.X[idx, :]
-            h = self.H[idx, :]
-
-            # Online update H.
-            W_t = self.W.T
-            WWT = self.W @ W_t
-            xWT = x @ W_t
-
-            if self._l1_reg_H > 0.0:
-                h_factor_numer = xWT - self._l1_reg_H
-                h_factor_numer[h_factor_numer < 0.0] = 0.0
-            else:
-                h_factor_numer = xWT
-
-            cache_arr = [None, None]
-            cur_h_err = self._h_err(h, WWT, xWT, cache_arr)
-
-            for j in range(self._h_max_iter):
-                prev_h_err = cur_h_err
-
-                h_factor_denom = h @ WWT
-                if self._l2_reg_H:
-                    h_factor_denom += self._l2_reg_H * h
-                self._update_matrix(h, h_factor_numer, h_factor_denom)
-                cur_h_err = self._h_err(h, WWT, xWT, cache_arr)
-                
-                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
-                    break
-
-            self.H[idx, :] = h
-
-            # Update sufficient statistics A and B.
-            h_t, hth = cache_arr
-            num_after = num_processed + cur_chunksize
-
-            A *= num_processed
-            A += hth
-            A /= num_after
-
-            B *= num_processed
-            B += h_t @ x
-            B /= num_after
-
-            num_processed = num_after
-
-            # Online update W.
-            if l1_reg_W > 0.0:
-                W_factor_numer = B - l1_reg_W
-                W_factor_numer[W_factor_numer < 0.0] = 0.0
-            else:
-                W_factor_numer = B
-
-            cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W, W_t, WWT)
-
-            for j in range(self._w_max_iter):
-                prev_W_err = cur_W_err
-
-                W_factor_denom = A @ self.W
-                if l2_reg_W > 0.0:
-                    W_factor_denom += l2_reg_W * self.W
-                self._update_matrix(self.W, W_factor_numer, W_factor_denom)
-                cur_W_err = self._W_err(A, B, l1_reg_W, l2_reg_W)
-
-                if self._is_converged(prev_W_err, cur_W_err, prev_W_err):
-                    break
-
-            i += self._chunk_size
-
-
-    def _online_update_H(self):
-        W_t = self.W.T
-        WWT = self.W @ W_t
-
-        i = 0
-        sum_h_err = 0.
-        while i < self.H.shape[0]:
-            x = self.X[i:(i+self._chunk_size), :]
-            h = self.H[i:(i+self._chunk_size), :]
-
-            xWT = x @ W_t
-            if self._l1_reg_H > 0.0:
-                h_factor_numer = xWT - self._l1_reg_H
-                h_factor_numer[h_factor_numer < 0.0] = 0.0
-            else:
-                h_factor_numer = xWT
-
-            cur_h_err = self._h_err(h, WWT, xWT)
-
-            for j in range(self._h_max_iter):
-                prev_h_err = cur_h_err
-
-                h_factor_denom = h @ WWT
-                if self._l2_reg_H:
-                    h_factor_denom += self._l2_reg_H * h
-                self._update_matrix(h, h_factor_numer, h_factor_denom)
-                cur_h_err = self._h_err(h, WWT, xWT)
-                
-                if self._is_converged(prev_h_err, cur_h_err, prev_h_err):
-                    break
-
-            sum_h_err += cur_h_err
-            i += self._chunk_size
-
-        return sum_h_err
-
-
-    def _online_update_H_W(self):
-        self._chunk_size = min(self.X.shape[0], self._chunk_size)
-
-        l1_reg_W = self._l1_reg_W / self.X.shape[0]
-        l2_reg_W = self._l2_reg_W / self.X.shape[0]
-
-        for i in range(self._max_iter):
-            self._online_update_one_pass(l1_reg_W, l2_reg_W)
-
-            # Update H again at the end of each pass.
-            H_err = self._online_update_H()
-
-            self._cur_err = torch.sqrt(2 * (H_err + self._X_SS_half + self._get_regularization_loss(self.W, self._l1_reg_W, self._l2_reg_W)))
-            if self._is_converged(self._prev_err, self._cur_err, self._init_err):
-                self.num_iters = i + 1
-                break
-            elif i == self._max_iter - 1:
-                self.num_iters = self._max_iter
-                print(f"    Not converged after {self._max_iter} pass(es).")
-            else:
-                self._prev_err = self._cur_err
-
-
-    def _batch_update_H(self):
-        if self._beta == 2:
-            H_factor_numer = self._XWT.clone()
-            H_factor_denom = self.H @ self._WWT
-        else:
-            HW = self._get_HW()
-            HW_pow = HW.pow(self._beta - 2)
-            H_factor_numer = (self.X * HW_pow) @ self._W_t
-            H_factor_denom = (HW_pow * HW) @ self._W_t
-
-        self._add_regularization_terms(self.H, H_factor_numer, H_factor_denom, self._l1_reg_H, self._l2_reg_H)
-        self._update_matrix(self.H, H_factor_numer, H_factor_denom)
-
-        if self._beta == 2:
-            self._H_t = self.H.T
-            self._HTH = self._H_t @ self.H
-
-    def _batch_update_W(self):
-        if self._beta == 2:
-            W_factor_numer = self._H_t @ self.X
-            W_factor_denom = self._HTH @ self.W
-        else:
-            H_t = self.H.T
-            HW = self._get_HW()
-            HW_pow = HW.pow(self._beta - 2)
-            W_factor_numer = H_t @ (self.X * HW_pow)
-            W_factor_denom = H_t @ (HW_pow * HW)
-
-        self._add_regularization_terms(self.W, W_factor_numer, W_factor_denom, self._l1_reg_W, self._l2_reg_W)
-        self._update_matrix(self.W, W_factor_numer, W_factor_denom)
-
-        if self._beta == 2:
-            self._W_t = self.W.T
-            self._WWT = self.W @ self._W_t
-            self._XWT = self.X @ self._W_t
-
-    def _batch_update_H_W(self):
-        for i in range(self._max_iter):
-            if (i + 1) % 10 == 0:
-                self._cur_err = self._loss(square_root=True)
-                if self._is_converged(self._prev_err, self._cur_err, self._init_err):
-                    self.num_iters = i + 1
-                    break
-                else:
-                    self._prev_err = self._cur_err
-
-            self._batch_update_H()
-            self._batch_update_W()
-
-            if i == self._max_iter - 1:
-                self.num_iters = self._max_iter
-                print(f"    Not converged after {self._max_iter} iteration(s).")
-
-    @torch.no_grad()
-    def fit(self, X):
-        torch.manual_seed(self._random_state)
-
-        if not isinstance(X, torch.Tensor):
-            X = torch.tensor(X, dtype=self._tensor_dtype, device=self._device_type)
-        else:
-            if X.dtype != self._tensor_dtype:
-                X = X.type(self._tensor_dtype)
-            if self._device_type == 'cuda' and (not X.is_cuda):
-                X = X.to(device=self._device_type)
-        assert torch.sum(X<0) == 0, "The input matrix is not non-negative. NMF cannot be applied."
-
-        self.X = X
-        if self._beta == 2:  # Cache sum of X^2 divided by 2 for speed-up of calculating beta loss.
-            self._X_SS_half = torch.sum(X**2) / 2
-        self._initialize_H_W()
-
-        if self._beta == 2 and self._update_method == 'online':
-            self._online_update_H_W()
-        else:
-            if self._update_method == 'online':
-                print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
-            self._batch_update_H_W()
-
-    def fit_transform(self, X):
-        self.fit(X)
-        return self.H
+            model_class = INMFOnlineHALS if algo == 'hals' else INMFOnlineMU
+            kwargs['chunk_max_iter'] = online_chunk_max_iter
+            kwargs['h_tol'] = online_h_tol
+            kwargs['v_tol'] = online_v_tol
+            kwargs['w_tol'] = online_w_tol
+
+    model = model_class(
+        n_components=n_components,
+        init=init,
+        tol=tol,
+        n_jobs=n_jobs,
+        random_state=random_state,
+        **kwargs
+    )
+
+    H = model.fit_transform(X)
+    W = model.W
+    V = model.V
+    err = model.reconstruction_err
+
+    def convert_within_list(l):
+        return [mat.cpu().numpy() for mat in l]
+
+    return convert_within_list(H), W.cpu().numpy(), convert_within_list(V), err.cpu().numpy()

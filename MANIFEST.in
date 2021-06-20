@@ -1,0 +1,6 @@
+exclude tests/*
+exclude archive/*
+exclude docs/**
+exclude build_linux.sh
+exclude wheel_build/*
+exclude .*
