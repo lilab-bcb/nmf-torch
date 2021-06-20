@@ -3,18 +3,19 @@ import torch
 from ._inmf_base import INMFBase
 from typing import List, Union
 
+
 class INMFOnlineBase(INMFBase):
     def __init__(
         self,
         n_components: int,
-        lam: float = 5.,
-        init: str = 'random',
-        tol: float = 1e-4,
-        random_state: int = 0,
-        fp_precision: Union[str, torch.dtype] = 'float',
-        device_type: str = 'cpu',
-        max_pass: int = 20,
-        chunk_size: int = 5000,
+        lam: float,
+        init: str,
+        tol: float,
+        random_state: int,
+        fp_precision: Union[str, torch.dtype],
+        device_type: str,
+        max_pass: int,
+        chunk_size: int,
     ):
         super().__init__(
             n_components=n_components,

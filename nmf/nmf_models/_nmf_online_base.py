@@ -3,6 +3,7 @@ import torch
 from ._nmf_base import NMFBase
 from typing import Union
 
+
 class NMFOnlineBase(NMFBase):
     def __init__(
         self,
@@ -21,7 +22,7 @@ class NMFOnlineBase(NMFBase):
         chunk_size: int = 5000,
     ):
         assert beta_loss == 2.0 # only work for F norm for now
-        
+
         super().__init__(
             n_components=n_components,
             init=init,
@@ -54,7 +55,7 @@ class NMFOnlineBase(NMFBase):
         """ calculate loss online by passing through all data"""
         i = 0
         WWT = self.W @ self.W.T
-        
+
         sum_h_err = torch.tensor(0.0, dtype=torch.double, device=self._device_type) # make sure sum_h_err is double to avoid summation errors
         while i < self.H.shape[0]:
             x = self.X[i:(i+self._chunk_size), :]
