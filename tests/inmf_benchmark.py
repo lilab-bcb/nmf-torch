@@ -7,7 +7,12 @@ import pandas as pd
 
 from nmf import integrative_nmf
 
-def loss(X, H, W, V, lam):
+def loss(X, H, W, V, lam, dtype='double'):
+    n_batches = len(X)
+    for k in range(n_batches):
+        H[k] = torch.tensor(H[k])
+        V[k] = torch.tensor(V[k])
+
     res = 0.0
     for k in range(len(X)):
         res += torch.norm(X[k].double() - H[k].double() @ (W.double() + V[k].double()), p=2)**2
@@ -16,15 +21,15 @@ def loss(X, H, W, V, lam):
 
     return torch.sqrt(res)
 
-def run_test(mats, algo, mode, n_components, lam, seed, fp_precision, batch_max_iter):
+
+def run_test(mats, algo, mode, n_components, lam, n_jobs, seed, fp_precision, batch_max_iter):
     print(f"{algo} {mode} Experiment...")
 
-    torch.set_num_threads(12)
-
     ts_start = time.time()
-    H, W, V, err = integrative_nmf(mats, algo=algo, mode=mode, n_components=n_components, lam=lam, random_state=seed, fp_precision=fp_precision, batch_max_iter=batch_max_iter)
+    H, W, V, err = integrative_nmf(mats, algo=algo, mode=mode, n_components=n_components, lam=lam,
+                        n_jobs=n_jobs, random_state=seed, fp_precision=fp_precision, batch_max_iter=batch_max_iter)
     ts_end = time.time()
-    err_confirm = loss(mats, H, W, V, lam)
+    err_confirm = loss(mats, H, torch.tensor(W), V, lam)
     print(f"{algo} {mode} finishes in {ts_end - ts_start} s, with error {err} (confirmed with {err_confirm}).")
 
 #data = pg.read_input("MantonBM_nonmix.zarr.zip")
@@ -58,6 +63,7 @@ rnd_seeds = [0]
 
 cnt = 0
 lam = 5.0
+n_jobs = 12
 algo_list = ['hals', 'bpp', 'mu']
 mode_list = ['batch', 'online']
 for seed in rnd_seeds:
@@ -66,4 +72,4 @@ for seed in rnd_seeds:
 
     for algo in algo_list:
         for mode in mode_list:
-            run_test(mats, algo, mode, n_components=20, lam=lam, seed=seed, fp_precision='float', batch_max_iter=500)
+            run_test(mats, algo, mode, n_components=20, lam=lam, n_jobs=n_jobs, seed=seed, fp_precision='float', batch_max_iter=500)

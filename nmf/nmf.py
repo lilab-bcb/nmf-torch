@@ -185,6 +185,7 @@ def run_nmf(
                 init=init,
                 beta_loss=beta_loss,
                 tol=tol,
+                n_jobs=n_jobs,
                 random_state=random_state,
                 **kwargs
             )
@@ -203,6 +204,7 @@ def integrative_nmf(
     algo: str = "hals",
     mode: str = "batch",
     tol: float = 1e-4,
+    n_jobs: int = -1,
     random_state: int = 0,
     use_gpu: bool = False,
     lam: float = 5.,
@@ -227,11 +229,9 @@ def integrative_nmf(
 
         .. math::
 
-            \\sum_{k}||X_k - H_k(W+V_k)||_{Fro}^2 + \\lambda * \\sum_{k}||H_kV_k||_1
+            \\sum_{k}||X_k - H_k(W+V_k)||_{Fro}^2 + \\lambda * \\sum_{k}||H_kV_k||_{Fro}^2
 
     where
-
-    :math:`||vec(A)||_1 = \\sum_{i, j} abs(A_{ij})` (Element-wise L1 norm)
 
     :math:`||A||_{Fro}^2 = \\sum_{i, j} A_{ij}^2` (Frobenius norm)
 
@@ -253,6 +253,8 @@ def integrative_nmf(
         Learning mode. Choose from ``batch`` and ``online``.
     tol: ``float``, optional, default: ``1e-4``
         The toleration used for convergence check.
+    n_jobs: ``int``, optional, default: ``-1``
+        Number of cpu threads to use. If -1, use PyTorch's default setting.
     random_state: ``int``, optional, default: ``0``
         The random state used for reproducibility on the results.
     use_gpu: ``bool``, optional, default: ``False``
@@ -266,9 +268,9 @@ def integrative_nmf(
     batch_max_iter: ``int``, optional, default: ``200``
         The maximum number of iterations to perform for batch learning.
     batch_hals_tol: ``float``, optional, default: ``0.0008``
-        For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
+        For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update V and W similarly.
     batch_hals_max_iter: ``int``, optional, default: ``200``
-        Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS.
+        Maximal iterations of updating H, V, and W for mimic BPP. If this parameter set to 1, it is the standard HALS.
     online_max_pass: ``int``, optional, default: ``20``
         The maximum number of online passes of all data to perform.
     online_chunk_size: ``int``, optional, default: ``5000``
@@ -346,6 +348,7 @@ def integrative_nmf(
         n_components=n_components,
         init=init,
         tol=tol,
+        n_jobs=n_jobs,
         random_state=random_state,
         **kwargs
     )
@@ -355,4 +358,7 @@ def integrative_nmf(
     V = model.V
     err = model.reconstruction_err
 
-    return H, W, V, err
+    def convert_within_list(l):
+        return [mat.cpu().numpy() for mat in l]
+
+    return convert_within_list(H), W.cpu().numpy(), convert_within_list(V), err.cpu().numpy()

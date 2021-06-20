@@ -9,7 +9,7 @@ from threadpoolctl import threadpool_limits
 
 EPSILON = 1e-20
 
-def beta_loss(X, Y, H, W, beta, epsilon, l1_reg_H=0., l2_reg_H=0., l1_reg_W=0., l2_reg_W=0., dtype='float'):
+def beta_loss(X, Y, H, W, beta, epsilon, l1_reg_H=0., l2_reg_H=0., l1_reg_W=0., l2_reg_W=0., dtype='double'):
     if dtype == 'double':
         X = X.double()
         Y = Y.double()
@@ -51,7 +51,7 @@ def beta_loss(X, Y, H, W, beta, epsilon, l1_reg_H=0., l2_reg_H=0., l1_reg_W=0., 
     return torch.sqrt(2 * res)
 
 
-def run_test(filename, algo, mode, k, n_jobs, fp, init='nndsvdar', loss='frobenius', tol=1e-4, max_iter=200, random_state=0,
+def run_test(filename, algo, mode, k, n_jobs, fp=None, init='nndsvdar', loss='frobenius', tol=1e-4, max_iter=200, random_state=0,
              alpha=0.0, l1_ratio=0.0, chunk_size=5000):
     X = np.load(filename)
     print(X.shape)
@@ -95,16 +95,16 @@ def run_test(filename, algo, mode, k, n_jobs, fp, init='nndsvdar', loss='frobeni
     #                     l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio),
     #                     beta=beta, epsilon=EPSILON, dtype='double')
     #    print(f"H has {np.sum(W1!=0)} non-zero elements, W has {np.sum(H1!=0)} non-zero elements. Iterations: {model.n_iter_}.")
-    torch.set_num_threads(n_jobs)
     ts_start = time.time()
-    H, W, err = run_nmf(X, k, init=init, beta_loss=loss, algo=algo, mode=mode, tol=tol, random_state=random_state,
+    H, W, err = run_nmf(X, k, init=init, beta_loss=loss, algo=algo, mode=mode, tol=tol, n_jobs=n_jobs, random_state=random_state,
                             alpha_W=alpha, l1_ratio_W=l1_ratio, alpha_H=alpha, l1_ratio_H=l1_ratio, fp_precision='float')
     ts_end = time.time()
     err_confirm = beta_loss(torch.tensor(X), torch.tensor(H @ W), torch.tensor(H), torch.tensor(W), beta=beta, epsilon=EPSILON,
                         l1_reg_H=alpha*l1_ratio, l2_reg_H=alpha*(1-l1_ratio),
                         l1_reg_W=alpha*l1_ratio, l2_reg_W=alpha*(1-l1_ratio))
     print(f"{algo} {mode} takes {ts_end - ts_start} s, with error {err} ({err_confirm} confirmed).")
-    fp.write(f"{algo} {mode},{ts_end - ts_start} s,{err}\n")
+    if fp is not None:
+        fp.write(f"{algo} {mode},{ts_end - ts_start} s,{err}\n")
 
 
 def run_batch_test(file_in, test_name, k, max_iter, chunk_size=50000, loss='frobenius', init='random'):
@@ -112,9 +112,9 @@ def run_batch_test(file_in, test_name, k, max_iter, chunk_size=50000, loss='frob
     mode_list = ['batch', 'online']
     n_jobs = 12
 
-    log_file = f"{test_name}.log"
-    with open(log_file, 'a') as fout:
-        fout.write("method,runtime,error\n")
+    #log_file = f"{test_name}.log"
+    #with open(log_file, 'a') as fout:
+    #    fout.write("method,runtime,error\n")
 
     #rand_ints = [3365, 2217, 629, 715, 4289, 3849, 625, 6598, 8275, 9570]
     rand_ints = [0]
@@ -127,13 +127,14 @@ def run_batch_test(file_in, test_name, k, max_iter, chunk_size=50000, loss='frob
     print("Random seeds in use:")
     print(rand_ints)
 
-    with open(log_file, 'a') as fout:
-        for i in range(n_exp):
-            for algo in algo_list:
-                for mode in mode_list:
-                    cprint(f"{i+1}-th {algo} {mode}:", 'green')
-                    run_test(file_in, algo, mode, k=k, n_jobs=n_jobs, fp=fout, loss=loss, init=init, max_iter=max_iter, chunk_size=chunk_size, random_state=rand_ints[i])
-                    gc.collect()
+    #with open(log_file, 'a') as fout:
+    for i in range(n_exp):
+        for algo in algo_list:
+            for mode in mode_list:
+                cprint(f"{i+1}-th {algo} {mode}:", 'green')
+                #run_test(file_in, algo, mode, k=k, n_jobs=n_jobs, fp=fout, loss=loss, init=init, max_iter=max_iter, chunk_size=chunk_size, random_state=rand_ints[i])
+                run_test(file_in, algo, mode, k=k, n_jobs=n_jobs, fp=None, loss=loss, init=init, max_iter=max_iter, chunk_size=chunk_size, random_state=rand_ints[i])
+                gc.collect()
 
 
 if __name__ == '__main__':

@@ -11,6 +11,7 @@ class INMFBase:
         lam: float,
         init: str,
         tol: float,
+        n_jobs: int,
         random_state: int,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
@@ -33,6 +34,9 @@ class INMFBase:
             self._tensor_dtype = fp_precision
 
         self._device_type = device_type
+
+        if n_jobs > 0:
+            torch.set_num_threads(n_jobs)
 
 
     def _initialize_W_H_V(self):
