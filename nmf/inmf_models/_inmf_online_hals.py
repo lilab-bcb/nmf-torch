@@ -3,22 +3,23 @@ import torch
 from ._inmf_online_base import INMFOnlineBase
 from typing import List, Union
 
+
 class INMFOnlineHALS(INMFOnlineBase):
     def __init__(
         self,
         n_components: int,
-        lam: float = 5.,
-        init: str = 'random',
-        tol: float = 1e-4,
-        random_state: int = 0,
-        fp_precision: Union[str, torch.dtype] = 'float',
-        device_type: str = 'cpu',
-        max_pass: int = 20,
-        chunk_size: int = 5000,
-        chunk_max_iter: int = 200,
-        h_tol: float = 0.01,
-        v_tol: float = 0.1,
-        w_tol: float = 0.01,
+        lam: float,
+        init: str,
+        tol: float,
+        random_state: int,
+        fp_precision: Union[str, torch.dtype],
+        device_type: str,
+        max_pass: int,
+        chunk_size: int,
+        chunk_max_iter: int,
+        h_tol: float,
+        v_tol: float,
+        w_tol: float,
     ):
         super().__init__(
             n_components=n_components,
@@ -78,7 +79,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                             denom = WVWVT[l, l] + self._lambda * VVT[l, l]
                         else:
                             numer = xWVT[:, l] - h @ WVWVT[:, l]
-                            denom = WVWVT[l, l]    
+                            denom = WVWVT[l, l]
                         hvec = h[:, l] + numer / denom
                         if torch.isnan(hvec).sum() > 0:
                             hvec[:] = 0.0 # divide zero error: set h_new to 0
@@ -181,7 +182,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                             denom = WVWVT[l, l] + self._lambda * VVT[l, l]
                         else:
                             numer = xWVT[:, l] - h @ WVWVT[:, l]
-                            denom = WVWVT[l, l]    
+                            denom = WVWVT[l, l]
                         hvec = h[:, l] + numer / denom
                         if torch.isnan(hvec).sum() > 0:
                             hvec[:] = 0.0 # divide zero error: set h_new to 0
@@ -248,7 +249,7 @@ class INMFOnlineHALS(INMFOnlineBase):
                             denom = WVWVT[l, l] + self._lambda * VVT[l, l]
                         else:
                             numer = xWVT[:, l] - h @ WVWVT[:, l]
-                            denom = WVWVT[l, l]    
+                            denom = WVWVT[l, l]
                         hvec = h[:, l] + numer / denom
                         if torch.isnan(hvec).sum() > 0:
                             hvec[:] = 0.0 # divide zero error: set h_new to 0
@@ -264,7 +265,7 @@ class INMFOnlineHALS(INMFOnlineBase):
 
                 hth = h.T @ h
                 sum_h_err += self._h_err(h, hth, WVWVT, xWVT, VVT)
-                
+
                 i += self._chunk_size
 
         return torch.sqrt(sum_h_err + self._SSX)

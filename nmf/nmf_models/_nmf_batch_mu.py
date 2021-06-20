@@ -1,6 +1,3 @@
-import torch
-
-from typing import Union
 from ._nmf_batch_base import NMFBatchBase
 
 

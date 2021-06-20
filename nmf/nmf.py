@@ -1,9 +1,9 @@
 import numpy as np
 import torch
-from typing import Union, Tuple
+from typing import List, Union, Tuple, Optional
 
-from nmf import NMFBatchMU, NMFBatchHALS, NMFBatchNnlsBpp, NMFOnlineMU, NMFOnlineHALS, NMFOnlineNnlsBpp
-
+from .nmf_models import NMFBatchMU, NMFBatchHALS, NMFBatchNnlsBpp, NMFOnlineMU, NMFOnlineHALS, NMFOnlineNnlsBpp
+from .inmf_models import INMFBatchHALS, INMFBatchMU, INMFBatchNnlsBpp, INMFOnlineHALS, INMFOnlineMU, INMFOnlineNnlsBpp
 
 def run_nmf(
     X: Union[np.array, torch.tensor],
@@ -27,7 +27,7 @@ def run_nmf(
     online_chunk_size: int = 5000,
     online_chunk_max_iter: int = 200,
     online_h_tol: float = 0.05,
-    online_w_tol: float = 0.05,    
+    online_w_tol: float = 0.05,
 ) -> Tuple[np.array, np.array, float]:
     """
     Perform Non-negative Matrix Factorization (NMF).
@@ -55,7 +55,7 @@ def run_nmf(
 
     :math:`||A||_{Fro}^2 = \\sum_{i, j} A_{ij}^2` (Frobenius norm)
 
-    NMF uses the multiplicative update (MU) solver, either a batch version or an online version specified in ``update_method`` parameter, to minimize the objective function.
+    NMF uses various solvers (specified in ``algo`` parameter), in either batch or online mode (specified in ``mode`` parameter), to minimize this objective function.
 
     Parameters
     ----------
@@ -76,7 +76,7 @@ def run_nmf(
     algo: ``str``, optional, default: ``hals``
         Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
     mode: ``str``, optional, default: ``batch``
-        Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``. For other beta loss, it switches back to ``batch`` method.        
+        Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``. For other beta loss, it switches back to ``batch`` method.
     tol: ``float``, optional, default: ``1e-4``
         The toleration used for convergence check.
     random_state: ``int``, optional, default: ``0``
@@ -102,7 +102,7 @@ def run_nmf(
     batch_hals_tol: ``float``, optional, default: ``0.05``
         For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
     batch_hals_max_iter: ``int``, optional, default: ``200``
-        Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS. 
+        Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS.
     online_max_pass: ``int``, optional, default: ``20``
         The maximum number of online passes of all data to perform.
     online_chunk_size: ``int``, optional, default: ``5000``
@@ -183,7 +183,7 @@ def run_nmf(
                 beta_loss=beta_loss,
                 tol=tol,
                 random_state=random_state,
-                **kwargs            
+                **kwargs
             )
 
     H = model.fit_transform(X)
@@ -191,3 +191,165 @@ def run_nmf(
     err = model.reconstruction_err
 
     return H.cpu().numpy(), W.cpu().numpy(), err.cpu().numpy()
+
+
+def integrative_nmf(
+    X: List[Union[np.array, torch.tensor]],
+    n_components: int,
+    init: Optional[str] = None,
+    algo: str = "hals",
+    mode: str = "batch",
+    tol: float = 1e-4,
+    random_state: int = 0,
+    use_gpu: bool = False,
+    lam: float = 5.,
+    fp_precision: Union[str, torch.dtype] = "float",
+    batch_max_iter: int = 200,
+    batch_hals_tol: float = 0.0008,
+    batch_hals_max_iter: int = 200,
+    online_max_pass: int = 20,
+    online_chunk_size: int = 5000,
+    online_chunk_max_iter: int = 200,
+    online_h_tol: float = 0.01,
+    online_v_tol: float = 0.1,
+    online_w_tol: float = 0.01,
+) -> Tuple[List[np.array], np.array, List[np.array], float]:
+    """
+    Run integrative Non-negative Matrix Factorization (iNMF).
+
+    Given a list of non-negative matrices X, perform integration using NMF.
+    It is useful for data integration, gene program extraction in Genomics, etc.
+
+    The objective function is
+
+        .. math::
+
+            \\sum_{k}||X_k - H_k(W+V_k)||_{Fro}^2 + \\lambda * \\sum_{k}||H_kV_k||_1
+
+    where
+
+    :math:`||vec(A)||_1 = \\sum_{i, j} abs(A_{ij})` (Element-wise L1 norm)
+
+    :math:`||A||_{Fro}^2 = \\sum_{i, j} A_{ij}^2` (Frobenius norm)
+
+    iNMF uses various solvers (specified in ``algo`` parameter), either in batch or online mode (specified in ``mode`` parameter), to minimize this objective function.
+
+    Parameters
+    ----------
+
+    X: List of ``numpy.array`` or ``torch.tensor``
+        The input list of non-negative matrices of shape (n_samples_i, n_features), one per batch. The n_samples_i is number of samples in batch i, and all batches must have the same number of features.
+    n_components: ``int``
+        Number of components achieved after iNMF.
+    init: ``str``, optional, default: ``None``
+        Method for initialization on H, W, and V matrices. Available options are: ``norm``, ``uniform``, meaning using random numbers generated from Normal or Uniform distribution.
+        If ``None``, use ``norm`` for online mode, while ``uniform`` for batch mode, in order to achieve best performance.
+    algo: ``str``, optional, default: ``hals``
+        Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+    mode: ``str``, optional, default: ``batch``
+        Learning mode. Choose from ``batch`` and ``online``.
+    tol: ``float``, optional, default: ``1e-4``
+        The toleration used for convergence check.
+    random_state: ``int``, optional, default: ``0``
+        The random state used for reproducibility on the results.
+    use_gpu: ``bool``, optional, default: ``False``
+        If ``True``, use GPU if available. Otherwise, use CPU only.
+    lam: ``float``, optional, default: ``5.0``
+        The coefficient for regularization terms. If ``0``, then no regularization will be performed.
+    fp_precision: ``str``, optional, default: ``float``
+        The numeric precision on the results.
+        If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
+        Alternatively, choose Pytorch's `torch dtype <https://pytorch.org/docs/stable/tensor_attributes.html>`_ of your own.
+    batch_max_iter: ``int``, optional, default: ``200``
+        The maximum number of iterations to perform for batch learning.
+    batch_hals_tol: ``float``, optional, default: ``0.0008``
+        For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
+    batch_hals_max_iter: ``int``, optional, default: ``200``
+        Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS.
+    online_max_pass: ``int``, optional, default: ``20``
+        The maximum number of online passes of all data to perform.
+    online_chunk_size: ``int``, optional, default: ``5000``
+        The chunk / mini-batch size for online learning.
+    online_chunk_max_iter: ``int``, optional, default: ``200``
+        The maximum number of iterations for updating H or W in online learning.
+    online_h_tol: ``float``, optional, default: ``0.01``
+        The tolerance for updating H in each chunk in online learning.
+    online_v_tol: ``float``, optional, default: ``0.1``
+        The tolerance for updating V in each chunk in online learning.
+    online_w_tol: ``float``, optional, default: ``0.01``
+        The tolerance for updating W in each chunk in online learning.
+
+    Returns
+    -------
+    H: List of ``numpy.array``
+        List of the resulting decomposed matrices of shape (n_samples_i, n_components), where n_samples_i is the number of samples in batch i.
+        Each matrix represents the transformed coordinates of samples regarding components of the corresponding batch.
+    W: ``numpy.array``
+        The resulting decomposed matrix of shape (n_components, n_features), which represents the shared information across the given batches in terms of features.
+    V: List of ``numpy.array``
+        List of the resulting decomposed matrices of shape (n_components, n_features).
+        Each matrix represents the batch-specific information in terms of features of the corresponding batch.
+    reconstruction_error: ``float``
+        The L2 Loss between the origin matrices X and their approximation after iNMF.
+
+    Examples
+    --------
+    >>> H, W, V, err = integrative_nmf(X, n_components=20)
+    >>> H, W, V, err = integrative_nmf(X, n_components=20, algo='bpp', mode='online')
+    """
+
+    device_type = 'cpu'
+    if use_gpu:
+        if torch.cuda.is_available():
+            device_type = 'cuda'
+            print("Use GPU mode.")
+        else:
+            print("CUDA is not available on your machine. Use CPU mode instead.")
+
+    if algo not in {'hals', 'mu', 'bpp'}:
+        raise ValueError("Parameter algo must be a valid value from ['hals', 'mu', 'bpp']!")
+    if mode not in {'batch', 'online'}:
+        raise ValueError("Parameter mode must be a valid value from ['batch', 'online']!")
+
+    if init is None:
+        init = 'norm' if mode == 'online' else 'uniform'
+
+    model_class = None
+    kwargs = {'device_type': device_type, 'lam': lam, 'fp_precision': fp_precision}
+
+    if mode == 'batch':
+        kwargs['max_iter'] = batch_max_iter
+        if algo == 'hals':
+            model_class = INMFBatchHALS
+            kwargs['hals_tol'] = batch_hals_tol
+            kwargs['hals_max_iter'] = batch_hals_max_iter
+        elif algo == 'bpp':
+            model_class = INMFBatchNnlsBpp
+        else:
+            model_class = INMFBatchMU
+    else:
+        kwargs['max_pass'] = online_max_pass
+        kwargs['chunk_size'] = online_chunk_size
+        if algo == 'bpp':
+            model_class = INMFOnlineNnlsBpp
+        else:
+            model_class = INMFOnlineHALS if algo == 'hals' else INMFOnlineMU
+            kwargs['chunk_max_iter'] = online_chunk_max_iter
+            kwargs['h_tol'] = online_h_tol
+            kwargs['v_tol'] = online_v_tol
+            kwargs['w_tol'] = online_w_tol
+
+    model = model_class(
+        n_components=n_components,
+        init=init,
+        tol=tol,
+        random_state=random_state,
+        **kwargs
+    )
+
+    H = model.fit_transform(X)
+    W = model.W
+    V = model.V
+    err = model.reconstruction_err
+
+    return H, W, V, err
