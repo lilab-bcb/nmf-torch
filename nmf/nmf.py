@@ -13,6 +13,7 @@ def run_nmf(
     algo: str = "hals",
     mode: str = "batch",
     tol: float = 1e-4,
+    n_jobs: int = -1,
     random_state: int = 0,
     use_gpu: bool = False,
     alpha_W: float = 0.0,
@@ -79,6 +80,8 @@ def run_nmf(
         Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``. For other beta loss, it switches back to ``batch`` method.        
     tol: ``float``, optional, default: ``1e-4``
         The toleration used for convergence check.
+    n_jobs: ``int``, optional, default: ``-1``
+        Number of cpu threads to use. If -1, use PyTorch's default setting.
     random_state: ``int``, optional, default: ``0``
         The random state used for reproducibility on the results.
     use_gpu: ``bool``, optional, default: ``False``

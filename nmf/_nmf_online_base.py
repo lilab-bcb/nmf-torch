@@ -17,6 +17,7 @@ class NMFOnlineBase(NMFBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
+        n_jobs: int = -1,
         max_pass: int = 20,
         chunk_size: int = 5000,
     ):
@@ -34,6 +35,7 @@ class NMFOnlineBase(NMFBase):
             l1_ratio_H=l1_ratio_H,
             fp_precision=fp_precision,
             device_type=device_type,
+            n_jobs=n_jobs,
         )
 
         self._max_pass = max_pass

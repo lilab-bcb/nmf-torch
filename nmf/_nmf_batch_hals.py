@@ -18,6 +18,7 @@ class NMFBatchHALS(NMFBatchBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
+        n_jobs: int = -1,
         max_iter: int = 500,
         hals_tol: float = 0.05,
         hals_max_iter: int = 200,
@@ -36,6 +37,7 @@ class NMFBatchHALS(NMFBatchBase):
             l1_ratio_H=l1_ratio_H,
             fp_precision=fp_precision,
             device_type=device_type,
+            n_jobs=n_jobs,
             max_iter=max_iter,
         )
 

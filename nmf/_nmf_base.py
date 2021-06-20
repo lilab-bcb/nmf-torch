@@ -17,6 +17,7 @@ class NMFBase:
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
+        n_jobs: int,
     ):
         self.k = n_components
         self._beta = beta_loss
@@ -49,6 +50,9 @@ class NMFBase:
         self._init_method = init
         self._tol = tol
         self._random_state = random_state
+
+        if n_jobs > 0:
+            torch.set_num_threads(n_jobs)
 
 
     def _get_regularization_loss(self, mat, l1_reg, l2_reg):

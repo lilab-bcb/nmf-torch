@@ -19,6 +19,7 @@ class NMFOnlineNnlsBpp(NMFOnlineBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
+        n_jobs: int = -1,
         max_pass: int = 20,
         chunk_size: int = 5000,
     ):
@@ -34,6 +35,7 @@ class NMFOnlineNnlsBpp(NMFOnlineBase):
             l1_ratio_H=l1_ratio_H,
             fp_precision=fp_precision,
             device_type=device_type,
+            n_jobs=n_jobs,
             max_pass=max_pass,
             chunk_size=chunk_size,
         )

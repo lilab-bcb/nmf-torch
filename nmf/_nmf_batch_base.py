@@ -17,6 +17,7 @@ class NMFBatchBase(NMFBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
+        n_jobs: int = -1,
         max_iter: int = 500,
     ):
         super().__init__(
@@ -31,6 +32,7 @@ class NMFBatchBase(NMFBase):
             l1_ratio_H=l1_ratio_H,
             fp_precision=fp_precision,
             device_type=device_type,
+            n_jobs=n_jobs,
         )
 
         self._max_iter = max_iter

@@ -19,6 +19,7 @@ class NMFBatchNnlsBpp(NMFBatchBase):
         l1_ratio_H: float,
         fp_precision: Union[str, torch.dtype],
         device_type: str,
+        n_jobs: int = -1,
         max_iter: int = 500,
     ):
         assert beta_loss == 2.0 # only work for F norm for now
@@ -35,6 +36,7 @@ class NMFBatchNnlsBpp(NMFBatchBase):
             l1_ratio_H=l1_ratio_H,
             fp_precision=fp_precision,
             device_type=device_type,
+            n_jobs=n_jobs,
             max_iter=max_iter,
         )
 
