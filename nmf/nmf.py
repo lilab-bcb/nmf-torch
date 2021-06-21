@@ -194,7 +194,7 @@ def run_nmf(
     W = model.W
     err = model.reconstruction_err
 
-    return H.cpu().numpy(), W.cpu().numpy(), err.cpu().numpy()
+    return H.cpu().numpy(), W.cpu().numpy(), err.item()
 
 
 def integrative_nmf(
@@ -361,4 +361,4 @@ def integrative_nmf(
     def convert_within_list(l):
         return [mat.cpu().numpy() for mat in l]
 
-    return convert_within_list(H), W.cpu().numpy(), convert_within_list(V), err.cpu().numpy()
+    return convert_within_list(H), W.cpu().numpy(), convert_within_list(V), err.item()
