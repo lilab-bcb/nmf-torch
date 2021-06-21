@@ -32,7 +32,7 @@ NMF
 Given a non-negative numeric matrix ``X`` of shape M-by-N (M is number of samples, N number of features) in either numpy array or torch tensor structure, run the following code::
 
 	from nmf import run_nmf
-   H, W, err = run_nmf(X, n_components=20)
+	H, W, err = run_nmf(X, n_components=20)
 
 will decompose ``X`` into two new non-negative matrices:
 
@@ -78,7 +78,7 @@ i.e. each X\ :sub:`i` in ``X`` has shape (|M_i|, N), where |M_i| is number of sa
 The following code::
 
 	from nmf import integrative_nmf
-   H, W, V, err = integrative_nmf(X, n_components=20)
+	H, W, V, err = integrative_nmf(X, n_components=20)
 
 will perform iNMF, which results in the following non-negative matrices:
 
