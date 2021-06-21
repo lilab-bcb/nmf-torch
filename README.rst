@@ -20,7 +20,7 @@ Installation
 
 This package is published on PyPI::
 
-	pip innstall nmf-torch
+	pip install nmf-torch
 
 
 Usage
@@ -36,8 +36,8 @@ Given a non-negative numeric matrix ``X`` of shape M-by-N (M is number of sample
 
 will decompose ``X`` into two new non-negative matrices:
 
-	- ``H`` of shape (M, 20), representing the transformed coordinates of samples regarding the 20 components;
-	- ``W`` of shape (20, N), representing the composition of each component in terms of features;
+- ``H`` of shape (M, 20), representing the transformed coordinates of samples regarding the 20 components;
+- ``W`` of shape (20, N), representing the composition of each component in terms of features;
 
 along with the loss between ``X`` and its approximation ``H*W``.
 
@@ -46,9 +46,9 @@ Advanced Settings
 
 By default, ``run_nmf`` function uses the batch HALS solver for NMF decomposition. In total, there are other solvers available in NMF-torch:
 
-	- **HALS**: Hierarchical Alternative Least Squares (`[Kimura et al., 2015]`_). The default.
-	- **MU**: Multiplicative Update. Set ``algo='mu'`` in ``run_nmf`` function.
-	- **BPP**: Alternative non-negative least squares with Block Principal Pivoting method (`[Kim & Park, 2011]`_). Set ``algo='bpp'`` in ``run_nmf`` function.
+- **HALS**: Hierarchical Alternative Least Squares (`[Kimura et al., 2015]`_). The default.
+- **MU**: Multiplicative Update. Set ``algo='mu'`` in ``run_nmf`` function.
+- **BPP**: Alternative non-negative least squares with Block Principal Pivoting method (`[Kim & Park, 2011]`_). Set ``algo='bpp'`` in ``run_nmf`` function.
 
 Besides, each solver has two modes: batch and online.
 The online mode is a modified version which is scalable for input matrix of a large number of samples.
@@ -58,9 +58,9 @@ The default beta loss is Frobenius (L2) distance, which is the most commonly use
 By changing ``beta_loss`` parameter in ``run_nmf`` function,
 users can specify other beta loss metrics:
 
-	- **KL divergence**: ``beta_loss='kullback-leibler'`` or ``beta_loss=1.0``;
-	- **Itakura-Saito divergence**: ``beta_loss='itakura-saito'`` or ``beta_loss=0``;
-	- Or any non-negative float number.
+- **KL divergence**: ``beta_loss='kullback-leibler'`` or ``beta_loss=1.0``;
+- **Itakura-Saito divergence**: ``beta_loss='itakura-saito'`` or ``beta_loss=0``;
+- Or any non-negative float number.
 
 Notice that since online mode only works for L2 loss, if you specify other beta loss, ``run_nmf`` will automatically switch back to batch mode.
 
@@ -82,9 +82,9 @@ The following code::
 
 will perform iNMF, which results in the following non-negative matrices:
 
-	- ``H``: List of matrices of shape (|M_i|, 20), each of which represents the transformed coordinates of samples regarding components of the corresponding batch;
-	- ``W`` of shape (20, N), representing the common composition (shared information) across the given batches in terms of features;
-	- ``V``: List of matrices of the same shape (20, N), each of which represents the batch-specific composition in terms of features of the corresponding batch,
+- ``H``: List of matrices of shape (|M_i|, 20), each of which represents the transformed coordinates of samples regarding components of the corresponding batch;
+- ``W`` of shape (20, N), representing the common composition (shared information) across the given batches in terms of features;
+- ``V``: List of matrices of the same shape (20, N), each of which represents the batch-specific composition in terms of features of the corresponding batch,
 
 along with the overall L2 loss between |X_i| and its approximation |H_i| \* (W + |V_i|) for each batch i.
 
