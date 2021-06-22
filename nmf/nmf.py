@@ -10,7 +10,7 @@ def run_nmf(
     n_components: int,
     init: str = "nndsvdar",
     beta_loss: Union[str, float] = "frobenius",
-    algo: str = "hals",
+    algo: str = "halsvar",
     mode: str = "batch",
     tol: float = 1e-4,
     n_jobs: int = -1,
@@ -74,7 +74,7 @@ def run_nmf(
             - ``kullback-leibler``:KL divergence, same as ``beta_loss=1.0``.
             - ``itakura-saito``: Itakura-Saito divergence, same as ``beta_loss=0``.
         Alternatively, it can also be a float number, which gives the beta parameter of the beta loss to be used.
-    algo: ``str``, optional, default: ``hals``
+    algo: ``str``, optional, default: ``halsvar``
         Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square), ``halsvar`` (HALS variant) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
         ``hals`` refers to the standard HALS algorithm and sets batch_hals_max_iter = 1. ``halsvar`` is the HALS variant that tries to mimic ``bpp`` and uses batch_hals_max_iter to tune the HALS iterations over H/W.
         If mode is online, there is no difference between ``hals`` and ``halsvar``.
