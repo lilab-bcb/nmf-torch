@@ -10,7 +10,7 @@ def run_nmf(
     n_components: int,
     init: str = "nndsvdar",
     beta_loss: Union[str, float] = "frobenius",
-    algo: str = "hals",
+    algo: str = "halsvar",
     mode: str = "batch",
     tol: float = 1e-4,
     n_jobs: int = -1,
@@ -74,8 +74,10 @@ def run_nmf(
             - ``kullback-leibler``:KL divergence, same as ``beta_loss=1.0``.
             - ``itakura-saito``: Itakura-Saito divergence, same as ``beta_loss=0``.
         Alternatively, it can also be a float number, which gives the beta parameter of the beta loss to be used.
-    algo: ``str``, optional, default: ``hals``
-        Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+    algo: ``str``, optional, default: ``halsvar``
+        Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square), ``halsvar`` (HALS variant) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+        ``hals`` refers to the standard HALS algorithm and sets batch_hals_max_iter = 1. ``halsvar`` is the HALS variant that tries to mimic ``bpp`` and uses batch_hals_max_iter to tune the HALS iterations over H/W.
+        If mode is online, there is no difference between ``hals`` and ``halsvar``.
     mode: ``str``, optional, default: ``batch``
         Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``. For other beta loss, it switches back to ``batch`` method.
     tol: ``float``, optional, default: ``1e-4``
@@ -148,13 +150,16 @@ def run_nmf(
         else:
             print("CUDA is not available on your machine. Use CPU mode instead.")
 
-    if algo not in {'mu', 'hals', 'bpp'}:
-        raise ValueError("Parameter algo must be a valid value from ['mu', 'hals', 'bpp']!")
+    if algo not in {'mu', 'hals', 'halsvar', 'bpp'}:
+        raise ValueError("Parameter algo must be a valid value from ['mu', 'hals', 'halsvar', 'bpp']!")
     if mode not in {'batch', 'online'}:
         raise ValueError("Parameter mode must be a valid value from ['batch', 'online']!")
     if beta_loss != 2 and mode == 'online':
         print("Cannot perform online update when beta not equal to 2. Switch to batch update method.")
         mode = 'batch'
+
+    if algo == 'hals':
+        batch_hals_max_iter = 1
 
     model_class = None
     kwargs = {'alpha_W': alpha_W, 'l1_ratio_W': l1_ratio_W, 'alpha_H': alpha_H, 'l1_ratio_H': l1_ratio_H, 'fp_precision': fp_precision, 'device_type': device_type}
@@ -163,7 +168,7 @@ def run_nmf(
         kwargs['max_iter'] = batch_max_iter
         if algo == 'mu':
             model_class = NMFBatchMU
-        elif algo == 'hals':
+        elif algo == 'hals' or algo == 'halsvar':
             model_class = NMFBatchHALS
             kwargs['hals_tol'] = batch_hals_tol
             kwargs['hals_max_iter'] = batch_hals_max_iter
@@ -172,7 +177,7 @@ def run_nmf(
     else:
         kwargs['max_pass'] = online_max_pass
         kwargs['chunk_size'] = online_chunk_size
-        if algo == 'mu' or algo == 'hals':
+        if algo == 'mu' or algo == 'hals' or algo == 'halsvar':
             kwargs['chunk_max_iter'] = online_chunk_max_iter
             kwargs['h_tol'] = online_h_tol
             kwargs['w_tol'] = online_w_tol
@@ -201,8 +206,8 @@ def integrative_nmf(
     X: List[Union[np.array, torch.tensor]],
     n_components: int,
     init: Optional[str] = None,
-    algo: str = "hals",
-    mode: str = "batch",
+    algo: str = "halsvar",
+    mode: str = "online",
     tol: float = 1e-4,
     n_jobs: int = -1,
     random_state: int = 0,
@@ -247,8 +252,8 @@ def integrative_nmf(
     init: ``str``, optional, default: ``None``
         Method for initialization on H, W, and V matrices. Available options are: ``norm``, ``uniform``, meaning using random numbers generated from Normal or Uniform distribution.
         If ``None``, use ``norm`` for online mode, while ``uniform`` for batch mode, in order to achieve best performance.
-    algo: ``str``, optional, default: ``hals``
-        Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+    algo: ``str``, optional, default: ``halsvar``
+        Choose from ``mu`` (Multiplicative Update), ``halsvar`` (Hierarchical Alternative Least Square variant, mimic bpp for better convergence) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
     mode: ``str``, optional, default: ``batch``
         Learning mode. Choose from ``batch`` and ``online``.
     tol: ``float``, optional, default: ``1e-4``
@@ -311,7 +316,7 @@ def integrative_nmf(
         else:
             print("CUDA is not available on your machine. Use CPU mode instead.")
 
-    if algo not in {'hals', 'mu', 'bpp'}:
+    if algo not in {'halsvar', 'mu', 'bpp'}:
         raise ValueError("Parameter algo must be a valid value from ['hals', 'mu', 'bpp']!")
     if mode not in {'batch', 'online'}:
         raise ValueError("Parameter mode must be a valid value from ['batch', 'online']!")
@@ -324,7 +329,7 @@ def integrative_nmf(
 
     if mode == 'batch':
         kwargs['max_iter'] = batch_max_iter
-        if algo == 'hals':
+        if algo == 'halsvar':
             model_class = INMFBatchHALS
             kwargs['hals_tol'] = batch_hals_tol
             kwargs['hals_max_iter'] = batch_hals_max_iter
@@ -338,7 +343,7 @@ def integrative_nmf(
         if algo == 'bpp':
             model_class = INMFOnlineNnlsBpp
         else:
-            model_class = INMFOnlineHALS if algo == 'hals' else INMFOnlineMU
+            model_class = INMFOnlineHALS if algo == 'halsvar' else INMFOnlineMU
             kwargs['chunk_max_iter'] = online_chunk_max_iter
             kwargs['h_tol'] = online_h_tol
             kwargs['v_tol'] = online_v_tol
