@@ -205,7 +205,7 @@ def run_nmf(
 def integrative_nmf(
     X: List[Union[np.array, torch.tensor]],
     n_components: int,
-    init: Optional[str] = None,
+    init: str = 'normal',
     algo: str = "halsvar",
     mode: str = "online",
     tol: float = 1e-4,
@@ -249,8 +249,8 @@ def integrative_nmf(
         The input list of non-negative matrices of shape (n_samples_i, n_features), one per batch. The n_samples_i is number of samples in batch i, and all batches must have the same number of features.
     n_components: ``int``
         Number of components achieved after iNMF.
-    init: ``str``, optional, default: ``None``
-        Method for initialization on H, W, and V matrices. Available options are: ``norm``, ``uniform``, meaning using random numbers generated from Normal or Uniform distribution.
+    init: ``str``, optional, default: ``normal``
+        Method for initialization on H, W, and V matrices. Available options are: ``normal`` or ``uniform``, meaning using random numbers generated from Normal or Uniform distribution.
         If ``None``, use ``norm`` for online mode, while ``uniform`` for batch mode, in order to achieve best performance.
     algo: ``str``, optional, default: ``halsvar``
         Choose from ``mu`` (Multiplicative Update), ``halsvar`` (Hierarchical Alternative Least Square variant, mimic bpp for better convergence) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
@@ -320,9 +320,6 @@ def integrative_nmf(
         raise ValueError("Parameter algo must be a valid value from ['hals', 'mu', 'bpp']!")
     if mode not in {'batch', 'online'}:
         raise ValueError("Parameter mode must be a valid value from ['batch', 'online']!")
-
-    if init is None:
-        init = 'norm' if mode == 'online' else 'uniform'
 
     model_class = None
     kwargs = {'device_type': device_type, 'lam': lam, 'fp_precision': fp_precision}

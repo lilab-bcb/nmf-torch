@@ -18,7 +18,7 @@ class INMFBase:
     ):
         self._n_components = n_components
 
-        assert init in ['norm', 'uniform'], "Initialization method must be chosen from ['norm', 'uniform']!"
+        assert init in ['normal', 'uniform'], "Initialization method must be chosen from ['normal', 'uniform']!"
         self._init_method = init
 
         self._lambda = lam
@@ -44,7 +44,7 @@ class INMFBase:
         self.H = []
         self.V = []
 
-        if self._init_method == 'norm':
+        if self._init_method == 'normal':
             self.W = torch.zeros((self._n_components, self._n_features), dtype=self._tensor_dtype, device=self._device_type)
             for k in range(self._n_batches):
                 avg = torch.sqrt(self.X[k].mean() / self._n_components)
