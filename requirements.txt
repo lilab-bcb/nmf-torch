@@ -1,4 +1,4 @@
 Cython
 importlib_metadata>=0.7; python_version < '3.8'
 numpy
-torch
+torch>=1.8.0
