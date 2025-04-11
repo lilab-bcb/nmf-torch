@@ -9,6 +9,7 @@ class INMFBase:
         self,
         n_components: int,
         lam: float,
+        eta: float,
         init: str,
         tol: float,
         n_jobs: int,
@@ -22,6 +23,7 @@ class INMFBase:
         self._init_method = init
 
         self._lambda = lam
+        self._eta = eta
         self._tol = tol
         self._random_state = random_state
         self._epsilon = 1e-20

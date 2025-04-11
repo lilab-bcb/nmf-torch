@@ -9,6 +9,7 @@ class INMFOnlineMU(INMFOnlineBase):
         self,
         n_components: int,
         lam: float,
+        eta: float,
         init: str,
         tol: float,
         n_jobs: int,
@@ -25,6 +26,7 @@ class INMFOnlineMU(INMFOnlineBase):
         super().__init__(
             n_components=n_components,
             lam=lam,
+            eta=eta,
             init=init,
             tol=tol,
             n_jobs=n_jobs,

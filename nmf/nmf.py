@@ -213,6 +213,7 @@ def integrative_nmf(
     random_state: int = 0,
     use_gpu: bool = False,
     lam: float = 5.,
+    eta: float = 0.0,
     fp_precision: Union[str, torch.dtype] = "float",
     batch_max_iter: int = 200,
     batch_hals_tol: float = 0.0008,
@@ -234,11 +235,13 @@ def integrative_nmf(
 
         .. math::
 
-            \\sum_{k}||X_k - H_k(W+V_k)||_{Fro}^2 + \\lambda * \\sum_{k}||H_kV_k||_{Fro}^2
+            \\sum_{k}||X_k - H_k(W+V_k)||_{Fro}^2 + \\lambda * \\sum_{k}||H_kV_k||_{Fro}^2 + \\eta * \\sum_{k} ||vec(H_k)||_1
 
     where
 
     :math:`||A||_{Fro}^2 = \\sum_{i, j} A_{ij}^2` (Frobenius norm)
+
+    :math:`||vec(A)||_1 = \\sum_{i, j} abs(A_{ij})` (Element-wise L1 norm)
 
     iNMF uses various solvers (specified in ``algo`` parameter), either in batch or online mode (specified in ``mode`` parameter), to minimize this objective function.
 
@@ -266,6 +269,8 @@ def integrative_nmf(
         If ``True``, use GPU if available. Otherwise, use CPU only.
     lam: ``float``, optional, default: ``5.0``
         The coefficient for regularization terms. If ``0``, then no regularization will be performed.
+    eta: ``float``, optional, default: ``0.0``
+        The L1 coefficient for H_ks. If ``0``, no L1 regularization.
     fp_precision: ``str``, optional, default: ``float``
         The numeric precision on the results.
         If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
@@ -322,7 +327,7 @@ def integrative_nmf(
         raise ValueError("Parameter mode must be a valid value from ['batch', 'online']!")
 
     model_class = None
-    kwargs = {'device_type': device_type, 'lam': lam, 'fp_precision': fp_precision}
+    kwargs = {'device_type': device_type, 'lam': lam, 'eta': eta, 'fp_precision': fp_precision}
 
     if mode == 'batch':
         kwargs['max_iter'] = batch_max_iter
@@ -341,6 +346,7 @@ def integrative_nmf(
             model_class = INMFOnlineNnlsBpp
         else:
             model_class = INMFOnlineHALS if algo == 'halsvar' else INMFOnlineMU
+
             kwargs['chunk_max_iter'] = online_chunk_max_iter
             kwargs['h_tol'] = online_h_tol
             kwargs['v_tol'] = online_v_tol

@@ -9,6 +9,7 @@ class INMFOnlineBase(INMFBase):
         self,
         n_components: int,
         lam: float,
+        eta: float,
         init: str,
         tol: float,
         n_jobs: int,
@@ -21,6 +22,7 @@ class INMFOnlineBase(INMFBase):
         super().__init__(
             n_components=n_components,
             lam=lam,
+            eta=eta,
             init=init,
             tol=tol,
             n_jobs=n_jobs,
@@ -36,6 +38,8 @@ class INMFOnlineBase(INMFBase):
     def _h_err(self, h, hth, WVWVT, xWVT, VVT):
         # Calculate L2 Loss (no sum of squares of X) for block h in trace format.
         res = self._trace(WVWVT + self._lambda * VVT, hth) if self._lambda > 0.0 else self._trace(WVWVT, hth)
+        if self._eta > 0.0:
+            res += self._eta * h.norm(p=1)
         res -= 2.0 * self._trace(h, xWVT)
         return res
 

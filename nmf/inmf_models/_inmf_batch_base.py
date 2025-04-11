@@ -9,6 +9,7 @@ class INMFBatchBase(INMFBase):
         self,
         n_components: int,
         lam: float,
+        eta: float,
         init: str,
         tol: float,
         n_jobs: int,
@@ -20,6 +21,7 @@ class INMFBatchBase(INMFBase):
         super().__init__(
             n_components=n_components,
             lam=lam,
+            eta=eta,
             init=init,
             tol=tol,
             n_jobs=n_jobs,
@@ -37,6 +39,8 @@ class INMFBatchBase(INMFBase):
             res += self._trace(self._HTH[k], self._WVWVT[k]) - 2.0 * self._trace(self.H[k], self._XWVT[k])
             if self._lambda > 0.0:
                 res += self._lambda * self._trace(self._VVT[k], self._HTH[k])
+            if self._eta > 0.0:
+                res += self._eta * self.H[k].norm(p=1)
         res += self._SSX
         return torch.sqrt(res)
 

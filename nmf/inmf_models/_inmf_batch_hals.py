@@ -9,6 +9,7 @@ class INMFBatchHALS(INMFBatchBase):
         self,
         n_components: int,
         lam: float,
+        eta: float,
         init: str,
         tol: float,
         n_jobs: int,
@@ -22,6 +23,7 @@ class INMFBatchHALS(INMFBatchBase):
         super().__init__(
             n_components=n_components,
             lam=lam,
+            eta=eta,
             init=init,
             tol=tol,
             n_jobs=n_jobs,
@@ -51,6 +53,8 @@ class INMFBatchHALS(INMFBatchBase):
                     else:
                         numer = self._XWVT[k][:, l] - self.H[k] @ self._WVWVT[k][:, l]
                         denom = self._WVWVT[k][l, l]
+                    if self._eta > 0.0:
+                        numer -= self._eta
                     h_new = self.H[k][:, l] + numer / denom
                     if torch.isnan(h_new).sum() > 0:
                         h_new[:] = 0.0 # divide zero error: set h_new to 0

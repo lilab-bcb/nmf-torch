@@ -9,6 +9,7 @@ class INMFOnlineHALS(INMFOnlineBase):
         self,
         n_components: int,
         lam: float,
+        eta: float,
         init: str,
         tol: float,
         n_jobs: int,
@@ -25,6 +26,7 @@ class INMFOnlineHALS(INMFOnlineBase):
         super().__init__(
             n_components=n_components,
             lam=lam,
+            eta=eta,
             init=init,
             tol=tol,
             n_jobs=n_jobs,
@@ -82,6 +84,8 @@ class INMFOnlineHALS(INMFOnlineBase):
                         else:
                             numer = xWVT[:, l] - h @ WVWVT[:, l]
                             denom = WVWVT[l, l]
+                        if self._eta > 0.0:
+                            numer -= self._eta
                         hvec = h[:, l] + numer / denom
                         if torch.isnan(hvec).sum() > 0:
                             hvec[:] = 0.0 # divide zero error: set h_new to 0
@@ -185,6 +189,8 @@ class INMFOnlineHALS(INMFOnlineBase):
                         else:
                             numer = xWVT[:, l] - h @ WVWVT[:, l]
                             denom = WVWVT[l, l]
+                        if self._eta > 0.0:
+                            numer -= self._eta
                         hvec = h[:, l] + numer / denom
                         if torch.isnan(hvec).sum() > 0:
                             hvec[:] = 0.0 # divide zero error: set h_new to 0
